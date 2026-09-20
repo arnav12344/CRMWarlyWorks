@@ -29,6 +29,46 @@ const PIPELINE_STAGES = [
   { name: "Not Interested", order: 5, isPositive: false, isTerminal: true },
 ];
 
+// Proof-point / value-prop snippet library (editable data, not hardcoded).
+const SNIPPETS = [
+  {
+    label: "PSLE Proof",
+    category: "Proof point",
+    body: "Students on WarlyWorks PSLE English practised 3x more comprehension passages and saw an average improvement of 1.5 grades over a term.",
+  },
+  {
+    label: "Teacher Time Saved",
+    category: "Proof point",
+    body: "Teachers save ~4 hours a week on marking because WarlyWorks auto-grades open-ended English answers with model-based feedback.",
+  },
+  {
+    label: "Free Pilot",
+    category: "Offer",
+    body: "We can set up a free 4-week pilot for one class — no commitment, and we handle the onboarding.",
+  },
+  {
+    label: "Sign-off",
+    category: "Closing",
+    body: "Happy to share a 10-minute walkthrough whenever suits you.",
+  },
+];
+
+// Example templates using merge variables + snippet insertion.
+const TEMPLATES = [
+  {
+    name: "PSLE English — First Touch",
+    subject: "Helping {{orgName}} lift PSLE English results",
+    body:
+      "Hi {{firstName}},\n\nI'm reaching out from WarlyWorks — we build PSLE English practice that adapts to each student. {{snippet:PSLE Proof}}\n\n{{snippet:Free Pilot}}\n\nWould a short chat be useful for the team at {{orgName}}?\n\n{{snippet:Sign-off}}",
+  },
+  {
+    name: "PSLE English — Follow Up",
+    subject: "Following up: WarlyWorks for {{orgName}}",
+    body:
+      "Hi {{firstName}},\n\nJust floating this back to the top of your inbox. {{snippet:Teacher Time Saved}}\n\nWorth a quick look for {{orgName}}?\n\n{{snippet:Sign-off}}",
+  },
+];
+
 async function main() {
   for (const t of CONTACT_TYPES) {
     await prisma.contactType.upsert({
@@ -46,7 +86,58 @@ async function main() {
     });
   }
 
-  console.log("Seed complete: contact types and pipeline stages ready.");
+  // Snippets — upsert-by-label (label is not unique, so guard manually).
+  for (const s of SNIPPETS) {
+    const existing = await prisma.snippet.findFirst({ where: { label: s.label } });
+    if (!existing) {
+      await prisma.snippet.create({ data: s });
+    }
+  }
+
+  // Templates — guard by name (not unique in schema).
+  const templateIds: Record<string, string> = {};
+  for (const t of TEMPLATES) {
+    const existing = await prisma.template.findFirst({ where: { name: t.name } });
+    const row =
+      existing ??
+      (await prisma.template.create({
+        data: { ...t, variables: JSON.stringify(["firstName", "orgName"]) },
+      }));
+    templateIds[t.name] = row.id;
+  }
+
+  // A starter two-step sequence (first touch + a 2-business-day bump).
+  const existingSeq = await prisma.sequence.findFirst({
+    where: { name: "PSLE English Outreach" },
+  });
+  if (!existingSeq) {
+    await prisma.sequence.create({
+      data: {
+        name: "PSLE English Outreach",
+        isActive: true,
+        steps: {
+          create: [
+            {
+              order: 0,
+              dayOffset: 0,
+              templateId: templateIds["PSLE English — First Touch"],
+              stopOnReply: true,
+            },
+            {
+              order: 1,
+              dayOffset: 2,
+              templateId: templateIds["PSLE English — Follow Up"],
+              stopOnReply: true,
+            },
+          ],
+        },
+      },
+    });
+  }
+
+  console.log(
+    "Seed complete: contact types, pipeline stages, snippets, templates, and a starter sequence ready."
+  );
 }
 
 main()

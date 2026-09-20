@@ -1,26 +1,56 @@
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Card, CardContent } from "@/components/ui/Card";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Button } from "@/components/ui/Button";
-import { ListOrdered } from "lucide-react";
+import { prisma } from "@/lib/db";
+import { SequencesWorkspace } from "./SequencesWorkspace";
 
-export default function SequencesPage() {
+export const dynamic = "force-dynamic";
+
+export default async function SequencesPage() {
+  const [templates, snippets, sequences] = await Promise.all([
+    prisma.template.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.snippet.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.sequence.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        steps: { orderBy: { order: "asc" }, include: { template: true } },
+        _count: { select: { enrollments: true } },
+      },
+    }),
+  ]);
+
   return (
     <>
       <PageHeader
-        title="Sequences"
-        description="Multi-step follow-up cadences that auto-stop on reply."
-        actions={<Button>New sequence</Button>}
+        title="Sequences & Templates"
+        description="Build reusable templates and proof-point snippets, then chain them into multi-step cadences that auto-stop on reply, bounce, or opt-out."
       />
-      <Card>
-        <CardContent>
-          <EmptyState
-            icon={<ListOrdered className="h-5 w-5" />}
-            title="No sequences yet"
-            description="Build a multi-step cadence with day offsets and stop-on-reply rules."
-          />
-        </CardContent>
-      </Card>
+      <SequencesWorkspace
+        templates={templates.map((t) => ({
+          id: t.id,
+          name: t.name,
+          subject: t.subject,
+          body: t.body,
+        }))}
+        snippets={snippets.map((s) => ({
+          id: s.id,
+          label: s.label,
+          category: s.category,
+          body: s.body,
+        }))}
+        sequences={sequences.map((s) => ({
+          id: s.id,
+          name: s.name,
+          isActive: s.isActive,
+          enrollments: s._count.enrollments,
+          steps: s.steps.map((st) => ({
+            id: st.id,
+            order: st.order,
+            dayOffset: st.dayOffset,
+            stopOnReply: st.stopOnReply,
+            templateId: st.templateId,
+            templateName: st.template?.name ?? null,
+          })),
+        }))}
+      />
     </>
   );
 }
