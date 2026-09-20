@@ -141,7 +141,7 @@ export default async function AnalyticsPage() {
         title="Analytics"
         description="Your outreach funnel: imported → verified → contacted → replied → positive → meeting."
         actions={
-          <Link href="/">
+          <Link href="/dashboard">
             <span className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
               Back to dashboard
             </span>

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   Upload,
   FileSpreadsheet,
@@ -638,9 +639,9 @@ function SummaryStep({
         <Button variant="secondary" onClick={onReset}>
           Import another file
         </Button>
-        <a href="/contacts">
+        <Link href="/contacts">
           <Button>View contacts</Button>
-        </a>
+        </Link>
       </div>
     </div>
   );
