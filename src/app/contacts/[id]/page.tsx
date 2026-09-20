@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { normalizeEmail } from "@/lib/email";
 import { ContactDetail, type TimelineEvent } from "./ContactDetail";
 
 export const dynamic = "force-dynamic";
@@ -31,10 +32,11 @@ export default async function ContactDetailPage({
 
   if (!contact) notFound();
 
+  const normalizedContactEmail = normalizeEmail(contact.email);
   const [stages, suppression] = await Promise.all([
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
-    contact.email
-      ? prisma.suppression.findUnique({ where: { email: contact.email } })
+    normalizedContactEmail
+      ? prisma.suppression.findUnique({ where: { email: normalizedContactEmail } })
       : Promise.resolve(null),
   ]);
 

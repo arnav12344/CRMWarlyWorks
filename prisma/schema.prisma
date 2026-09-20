@@ -28,6 +28,11 @@ model ContactType {
 model PipelineStage {
   id         String    @id @default(cuid())
   name       String    @unique
+  // Stable machine key the code keys off (e.g. "contacted", "replied",
+  // "not_interested", "meeting"). Nullable so custom stages need not set it and
+  // so it is back-compatible. Display `name` stays freely editable; code never
+  // matches on `name` when a `role` is present.
+  role       String?
   order      Int       @default(0)
   isPositive Boolean   @default(false)
   isTerminal Boolean   @default(false)

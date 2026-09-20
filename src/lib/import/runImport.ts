@@ -26,6 +26,7 @@ import {
 import { redactSecrets } from "./redactSecrets";
 import { dedupeOrganizations, computeDedupeKey } from "./dedupe";
 import { emailDomain, isRoleInbox } from "./email";
+import { normalizeEmail } from "@/lib/email";
 import type { ColumnMapping, ImportConfig } from "./mapping";
 
 /** A planned organization ready to be persisted. */
@@ -157,11 +158,13 @@ export function buildImportPlan(
     if (!key) continue;
     if (!cand.email && !cand.fullName) continue;
     const list = contactsByKey.get(key) ?? [];
-    // Avoid duplicate identical emails within one org.
-    if (cand.email && list.some((c) => c.email === cand.email)) continue;
+    // Normalize email casing on write so suppression / dedupe checks agree.
+    const normalizedEmail = normalizeEmail(cand.email);
+    // Avoid duplicate identical emails within one org (compare normalized).
+    if (normalizedEmail && list.some((c) => c.email === normalizedEmail)) continue;
     const nameParts = splitName(cand.fullName);
     list.push({
-      email: cand.email || undefined,
+      email: normalizedEmail || undefined,
       emailDomain: emailDomain(cand.email),
       isRoleInbox: isRoleInbox(cand.email),
       fullName: cand.fullName || undefined,

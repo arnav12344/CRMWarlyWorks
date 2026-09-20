@@ -12,9 +12,9 @@ import {
 function seedBasic() {
   const db = new FakeDb();
   db.pipelineStages.push(
-    { id: "st-contacted", name: "Contacted", order: 1 },
-    { id: "st-replied", name: "Replied", order: 2 },
-    { id: "st-not", name: "Not Interested", order: 5 }
+    { id: "st-contacted", name: "Contacted", role: "contacted", order: 1 },
+    { id: "st-replied", name: "Replied", role: "replied", order: 2 },
+    { id: "st-not", name: "Not Interested", role: "not_interested", order: 5 }
   );
   db.organizations.push({ id: "org1", name: "Rosyth School", city: "Singapore" });
   db.contacts.push({
@@ -176,6 +176,68 @@ describe("suppression prevents sending / enrolling", () => {
     expect(await isEmailSuppressed(asDb(db), "wei@rosyth.edu.sg")).toBe(false);
     db.suppressions.push({ id: "s1", email: "wei@rosyth.edu.sg" });
     expect(await isEmailSuppressed(asDb(db), "wei@rosyth.edu.sg")).toBe(true);
+  });
+});
+
+describe("case-insensitive suppression", () => {
+  it("blocks send when suppression is stored in a different case than the contact email", async () => {
+    const db = seedBasic();
+    // Suppression entry is stored lowercased (as normalizeEmail would write it).
+    db.suppressions.push({ id: "s1", email: "wei@rosyth.edu.sg", reason: "opt-out" });
+    // Contact email carries mixed casing (e.g. imported before normalization).
+    db.contacts[0].email = "Wei@Rosyth.EDU.sg";
+    db.messages.push({ id: "m1", contactId: "c1", status: "queued", subject: "Hi" });
+    const res = await simulateSend(asDb(db), "m1");
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/suppressed/i);
+    expect(db.messages[0].status).toBe("queued"); // never sent
+  });
+
+  it("blocks enrollment when the suppressed address differs only by case", async () => {
+    const db = seedBasic();
+    db.suppressions.push({ id: "s1", email: "wei@rosyth.edu.sg", reason: "opt-out" });
+    db.contacts[0].email = "WEI@ROSYTH.EDU.SG";
+    const res = await enrollContact(asDb(db), "c1", "seq1");
+    expect(res.ok).toBe(false);
+    expect(db.enrollments).toHaveLength(0);
+  });
+
+  it("isEmailSuppressed matches regardless of lookup casing", async () => {
+    const db = seedBasic();
+    db.suppressions.push({ id: "s1", email: "wei@rosyth.edu.sg" });
+    expect(await isEmailSuppressed(asDb(db), "WEI@Rosyth.edu.SG")).toBe(true);
+  });
+});
+
+describe("stage resolution by stable role", () => {
+  it("moves to the stage carrying the role even when its display name was changed", async () => {
+    const db = seedBasic();
+    // User renamed the "Contacted" stage to "Reached out" — role is unchanged.
+    db.pipelineStages[0] = { id: "st-contacted", name: "Reached out", role: "contacted", order: 1 };
+    db.messages.push({ id: "m1", contactId: "c1", status: "queued", subject: "Hi" });
+    const res = await simulateSend(asDb(db), "m1", new Date("2026-01-01T04:00:00Z"));
+    expect(res.ok).toBe(true);
+    // Resolved by role, not the old name.
+    expect(db.contacts[0].pipelineStageId).toBe("st-contacted");
+  });
+
+  it("falls back to the seed display name when no stage carries the role", async () => {
+    const db = seedBasic();
+    // Simulate an older DB seeded before the role column: name only, no role.
+    db.pipelineStages = [{ id: "st-legacy-contacted", name: "Contacted", order: 1 }];
+    db.messages.push({ id: "m1", contactId: "c1", status: "queued", subject: "Hi" });
+    const res = await simulateSend(asDb(db), "m1", new Date("2026-01-01T04:00:00Z"));
+    expect(res.ok).toBe(true);
+    expect(db.contacts[0].pipelineStageId).toBe("st-legacy-contacted");
+  });
+
+  it("is a safe no-op when the target stage was deleted entirely", async () => {
+    const db = seedBasic();
+    db.pipelineStages = []; // user deleted every stage
+    db.messages.push({ id: "m1", contactId: "c1", status: "queued", subject: "Hi" });
+    const res = await simulateSend(asDb(db), "m1", new Date("2026-01-01T04:00:00Z"));
+    expect(res.ok).toBe(true); // send still succeeds
+    expect(db.contacts[0].pipelineStageId).toBeNull();
   });
 });
 

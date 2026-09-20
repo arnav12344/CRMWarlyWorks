@@ -14,19 +14,34 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { scheduleFollowUps, APP_TIMEZONE } from "./reminders";
+import { normalizeEmail } from "./email";
+import { SEED_STAGE_NAME_BY_ROLE, type StageRole } from "./stageRoles";
 
 type Db = PrismaClient;
 
-/** Is this email on the suppression (do-not-contact) list? */
+/** Is this email on the suppression (do-not-contact) list? Case-insensitive. */
 export async function isEmailSuppressed(db: Db, email: string | null | undefined): Promise<boolean> {
-  if (!email) return false;
-  const row = await db.suppression.findUnique({ where: { email } });
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  const row = await db.suppression.findUnique({ where: { email: normalized } });
   return !!row;
 }
 
-/** Move a contact to a named pipeline stage if it exists. No-op otherwise. */
-async function moveToStage(db: Db, contactId: string, stageName: string): Promise<void> {
-  const stage = await db.pipelineStage.findFirst({ where: { name: stageName } });
+/**
+ * Move a contact to the pipeline stage that carries the given stable `role`.
+ *
+ * Stages are user-editable data, so we resolve by the machine `role` (never the
+ * display name). If no stage carries the role yet (e.g. an older seed), fall
+ * back to the original seed display name. No-op when neither resolves, so a
+ * user who deleted the stage entirely never causes an error.
+ */
+async function moveToStage(db: Db, contactId: string, role: StageRole): Promise<void> {
+  let stage = await db.pipelineStage.findFirst({ where: { role } });
+  if (!stage) {
+    stage = await db.pipelineStage.findFirst({
+      where: { name: SEED_STAGE_NAME_BY_ROLE[role] },
+    });
+  }
   if (stage) {
     await db.contact.update({
       where: { id: contactId },
@@ -83,7 +98,7 @@ export async function simulateSend(
     },
   });
 
-  await moveToStage(db, contact.id, "Contacted");
+  await moveToStage(db, contact.id, "contacted");
 
   // Auto-schedule business-day follow-ups from the send date.
   const followUps = scheduleFollowUps(now, [2, 3], timeZone);
@@ -198,7 +213,7 @@ export async function simulateEvent(
         summary: `Replied (simulated): ${message.subject ?? "(no subject)"}`,
       },
     });
-    await moveToStage(db, contact.id, "Replied");
+    await moveToStage(db, contact.id, "replied");
     const stopped = await stopActiveEnrollments(db, contact.id, "replied");
     return { ok: true, stoppedEnrollmentIds: stopped };
   }
@@ -215,7 +230,7 @@ export async function simulateEvent(
       summary: `Bounced (simulated): ${message.subject ?? "(no subject)"}`,
     },
   });
-  await moveToStage(db, contact.id, "Not Interested");
+  await moveToStage(db, contact.id, "not_interested");
   const stopped = await stopActiveEnrollments(db, contact.id, "bounced");
   const suppressed = await suppressContact(db, contact.id, "bounced");
   return { ok: true, stoppedEnrollmentIds: stopped, suppressed };
@@ -264,11 +279,12 @@ export async function suppressContact(
     },
   });
 
-  if (contact.email) {
+  const normalizedEmail = normalizeEmail(contact.email);
+  if (normalizedEmail) {
     await db.suppression.upsert({
-      where: { email: contact.email },
+      where: { email: normalizedEmail },
       update: { reason },
-      create: { email: contact.email, reason },
+      create: { email: normalizedEmail, reason },
     });
     return true;
   }

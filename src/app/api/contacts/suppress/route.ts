@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { normalizeEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
@@ -42,16 +43,17 @@ export async function POST(request: Request) {
     data: { suppressed },
   });
 
-  if (contact.email) {
+  const normalizedEmail = normalizeEmail(contact.email);
+  if (normalizedEmail) {
     if (suppressed) {
       await prisma.suppression.upsert({
-        where: { email: contact.email },
+        where: { email: normalizedEmail },
         update: { reason: reason ?? "Manually suppressed" },
-        create: { email: contact.email, reason: reason ?? "Manually suppressed" },
+        create: { email: normalizedEmail, reason: reason ?? "Manually suppressed" },
       });
     } else {
       await prisma.suppression
-        .delete({ where: { email: contact.email } })
+        .delete({ where: { email: normalizedEmail } })
         .catch(() => undefined);
     }
   }

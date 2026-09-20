@@ -39,18 +39,20 @@ const CONTACT_TYPES = [
 ];
 
 // Funnel-aligned stages. `isPositive`/`isTerminal` drive analytics + dashboard.
-// NOTE: the outreach engine (src/lib/outreach.ts) moves contacts to stages by
-// the names "Contacted", "Replied" and "Not Interested", so those names must
-// exist here.
+// The outreach engine (src/lib/outreach.ts) and analytics resolve stages by the
+// stable `role` machine key (see src/lib/stageRoles.ts), NOT the display
+// `name`, so users can freely rename these stages without breaking stage
+// movement or the funnel meeting metric. `role` is null for stages with no
+// special machine behavior.
 const PIPELINE_STAGES = [
-  { name: "New", order: 0, isPositive: false, isTerminal: false },
-  { name: "Verified", order: 1, isPositive: false, isTerminal: false },
-  { name: "Contacted", order: 2, isPositive: false, isTerminal: false },
-  { name: "Replied", order: 3, isPositive: true, isTerminal: false },
-  { name: "Positive", order: 4, isPositive: true, isTerminal: false },
-  { name: "Meeting", order: 5, isPositive: true, isTerminal: false },
-  { name: "Closed", order: 6, isPositive: true, isTerminal: true },
-  { name: "Not Interested", order: 7, isPositive: false, isTerminal: true },
+  { name: "New", role: null, order: 0, isPositive: false, isTerminal: false },
+  { name: "Verified", role: null, order: 1, isPositive: false, isTerminal: false },
+  { name: "Contacted", role: "contacted", order: 2, isPositive: false, isTerminal: false },
+  { name: "Replied", role: "replied", order: 3, isPositive: true, isTerminal: false },
+  { name: "Positive", role: null, order: 4, isPositive: true, isTerminal: false },
+  { name: "Meeting", role: "meeting", order: 5, isPositive: true, isTerminal: false },
+  { name: "Closed", role: null, order: 6, isPositive: true, isTerminal: true },
+  { name: "Not Interested", role: "not_interested", order: 7, isPositive: false, isTerminal: true },
 ];
 
 const SNIPPETS = [

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import { prisma } from "@/lib/db";
+import { SEED_STAGE_NAME_BY_ROLE } from "@/lib/stageRoles";
 import { BarChart3 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -18,11 +19,21 @@ export const dynamic = "force-dynamic";
  *   - contacted: contacts with at least one SENT outbound message
  *   - replied  : contacts with an inbound reply
  *   - positive : contacts sitting in a stage flagged isPositive
- *   - meeting  : contacts in the "Meeting" stage (or beyond)
+ *   - meeting  : contacts in the stage carrying the stable "meeting" role
  *
- * These line up with the seeded pipeline stage names and message statuses.
+ * The meeting count keys off the stable stage `role` (with a fallback to the
+ * original seed name), NOT the editable display name, so renaming the
+ * "Meeting" stage does not zero the metric.
  */
 export default async function AnalyticsPage() {
+  // Resolve the meeting stage by its stable machine role, falling back to the
+  // original seed display name for DBs seeded before the role column existed.
+  const meetingStage =
+    (await prisma.pipelineStage.findFirst({ where: { role: "meeting" } })) ??
+    (await prisma.pipelineStage.findFirst({
+      where: { name: SEED_STAGE_NAME_BY_ROLE.meeting },
+    }));
+
   const [
     imported,
     verified,
@@ -46,7 +57,9 @@ export default async function AnalyticsPage() {
       distinct: ["contactId"],
     }),
     prisma.contact.count({ where: { pipelineStage: { isPositive: true } } }),
-    prisma.contact.count({ where: { pipelineStage: { name: "Meeting" } } }),
+    meetingStage
+      ? prisma.contact.count({ where: { pipelineStageId: meetingStage.id } })
+      : Promise.resolve(0),
     prisma.contactType.findMany({
       orderBy: { name: "asc" },
       include: {
