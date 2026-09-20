@@ -1,37 +1,45 @@
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/Card";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Settings as SettingsIcon } from "lucide-react";
+  SETTING_KEYS,
+  loadProviderKeys,
+  getPlainSetting,
+  maskKey,
+} from "@/lib/verify/settings";
+import { SettingsForm } from "./SettingsForm";
 
-export default function SettingsPage() {
+export const dynamic = "force-dynamic";
+
+const DEFAULT_TIMEZONE = "Asia/Singapore";
+
+/**
+ * Settings: encrypted provider API keys + general config.
+ *
+ * Server component only ever passes masked (last-4) previews to the client —
+ * plaintext keys never leave the server.
+ */
+export default async function SettingsPage() {
+  const keys = await loadProviderKeys();
+  const timezone = await getPlainSetting(SETTING_KEYS.timezone, DEFAULT_TIMEZONE);
+
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Contact types, pipeline stages, and encrypted provider API keys."
+        description="Encrypted provider API keys and general configuration."
       />
-      <Card>
-        <CardHeader>
-          <CardTitle>Provider API keys</CardTitle>
-          <CardDescription>
-            Keys for MillionVerifier and ZeroBounce are encrypted at rest
-            (AES-256-GCM) and never exposed to the client.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <EmptyState
-            icon={<SettingsIcon className="h-5 w-5" />}
-            title="Configuration coming online"
-            description="Manage editable contact types, pipeline stages, and secure API keys from here."
-          />
-        </CardContent>
-      </Card>
+      <SettingsForm
+        initial={{
+          millionverifier: {
+            configured: Boolean(keys.millionverifier),
+            masked: maskKey(keys.millionverifier),
+          },
+          zerobounce: {
+            configured: Boolean(keys.zerobounce),
+            masked: maskKey(keys.zerobounce),
+          },
+          timezone,
+        }}
+      />
     </>
   );
 }
