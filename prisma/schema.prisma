@@ -1,0 +1,252 @@
+// WarlyWorks CRM data model.
+// Design principle: everything the user configures (contact types, pipeline
+// stages, sequences, templates, snippets) is DATA in these tables, never a
+// hardcoded TypeScript enum. Seed rows (schools, tuition centres, NGOs,
+// funders, partners, educators) live in ContactType, not in code.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Editable "types of people/organizations to contact". Seeded, not enumerated.
+model ContactType {
+  id            String         @id @default(cuid())
+  name          String         @unique
+  color         String         @default("#6366f1")
+  description   String?
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  organizations Organization[]
+}
+
+/// Editable pipeline stages (data-driven, orderable).
+model PipelineStage {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  order      Int       @default(0)
+  isPositive Boolean   @default(false)
+  isTerminal Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  contacts   Contact[]
+}
+
+model Organization {
+  id            String       @id @default(cuid())
+  name          String
+  website       String?
+  domain        String?
+  phone         String?
+  address       String?
+  city          String?
+  country       String?
+  contactTypeId String?
+  contactType   ContactType? @relation(fields: [contactTypeId], references: [id])
+  source        String?
+  dedupeKey     String       @unique
+  rawImportRef  String?
+  notes         String?
+  createdAt     DateTime     @default(now())
+  contacts      Contact[]
+}
+
+model Contact {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  firstName       String?
+  lastName        String?
+  fullName        String?
+  title           String?
+  email           String?
+  emailDomain     String?
+  isRoleInbox     Boolean       @default(false)
+  pipelineStageId String?
+  pipelineStage   PipelineStage? @relation(fields: [pipelineStageId], references: [id])
+  status          String        @default("new")
+  suppressed      Boolean       @default(false)
+  source          String?
+  // Aggregated verification consensus (computed from EmailVerification rows).
+  verificationConsensus String?  // e.g. valid | invalid | risky | unknown
+  mailboxType           String?  // e.g. individual | role | catchall | unknown
+  likelyIndividual      Boolean  @default(false)
+  createdAt       DateTime      @default(now())
+
+  verifications   EmailVerification[]
+  messages        EmailMessage[]
+  activities      Activity[]
+  followUps       FollowUp[]
+  enrollments     SequenceEnrollment[]
+
+  @@index([email])
+  @@index([organizationId])
+}
+
+/// MANY rows per contact so two providers (MillionVerifier + ZeroBounce) can be
+/// cross-checked. `provider` is a string ("millionverifier" | "zerobounce" |
+/// "manual" | "mock"), not a Prisma enum.
+model EmailVerification {
+  id           String   @id @default(cuid())
+  contactId    String
+  contact      Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  email        String
+  provider     String
+  result       String?  // valid | invalid | risky | unknown
+  subStatus    String?
+  quality      String?
+  isFree       Boolean  @default(false)
+  isRole       Boolean  @default(false)
+  isDisposable Boolean  @default(false)
+  isCatchAll   Boolean  @default(false)
+  rawJson      String?
+  checkedAt    DateTime @default(now())
+
+  @@index([contactId])
+}
+
+model Template {
+  id        String         @id @default(cuid())
+  name      String
+  subject   String
+  body      String
+  variables String?        // JSON array of variable names
+  createdAt DateTime       @default(now())
+  steps     SequenceStep[]
+  messages  EmailMessage[]
+}
+
+/// Reusable proof-point / value-prop library.
+model Snippet {
+  id        String   @id @default(cuid())
+  label     String
+  category  String?
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model Sequence {
+  id          String               @id @default(cuid())
+  name        String
+  isActive    Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+}
+
+model SequenceStep {
+  id          String    @id @default(cuid())
+  sequenceId  String
+  sequence    Sequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  order       Int       @default(0)
+  dayOffset   Int       @default(0)
+  templateId  String?
+  template    Template? @relation(fields: [templateId], references: [id])
+  stopOnReply Boolean   @default(true)
+
+  @@index([sequenceId])
+}
+
+model SequenceEnrollment {
+  id           String         @id @default(cuid())
+  contactId    String
+  contact      Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequenceId   String
+  sequence     Sequence       @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  status       String         @default("active") // active | stopped | completed
+  currentStep  Int            @default(0)
+  stoppedReason String?
+  enrolledAt   DateTime       @default(now())
+  messages     EmailMessage[]
+
+  @@index([contactId])
+  @@index([sequenceId])
+}
+
+model EmailMessage {
+  id                   String              @id @default(cuid())
+  contactId            String
+  contact              Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequenceEnrollmentId String?
+  sequenceEnrollment   SequenceEnrollment? @relation(fields: [sequenceEnrollmentId], references: [id])
+  templateId           String?
+  template             Template?           @relation(fields: [templateId], references: [id])
+  direction            String              @default("outbound") // outbound | inbound
+  subject              String?
+  body                 String?
+  status               String              @default("draft") // draft | queued | approved | sent | bounced | replied
+  sentAt               DateTime?
+  openedAt             DateTime?
+  repliedAt            DateTime?
+  bouncedAt            DateTime?
+  createdAt            DateTime            @default(now())
+
+  @@index([contactId])
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  type      String
+  summary   String?
+  meta      String?  // JSON blob
+  createdAt DateTime @default(now())
+
+  @@index([contactId])
+}
+
+model FollowUp {
+  id                 String    @id @default(cuid())
+  contactId          String
+  contact            Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  dueAt              DateTime
+  reason             String?
+  businessDaysOffset Int       @default(0)
+  status             String    @default("pending") // pending | done | snoozed
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([contactId])
+  @@index([status])
+}
+
+model Suppression {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+/// Provider API keys and config. Secret values are stored in valueEncrypted
+/// (AES-256-GCM, see src/lib/crypto.ts).
+model Setting {
+  id             String   @id @default(cuid())
+  key            String   @unique
+  valueEncrypted String?
+  updatedAt      DateTime @updatedAt
+}
+
+model ImportBatch {
+  id                  String      @id @default(cuid())
+  filename            String
+  rowCount            Int         @default(0)
+  orgCount            Int         @default(0)
+  contactCount        Int         @default(0)
+  redactedSecretCount Int         @default(0)
+  createdAt           DateTime    @default(now())
+  rows                ImportRow[]
+}
+
+model ImportRow {
+  id            String      @id @default(cuid())
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  raw           String      // JSON blob of the original (redacted) row
+  createdAt     DateTime    @default(now())
+
+  @@index([importBatchId])
+}
