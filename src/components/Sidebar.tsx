@@ -16,7 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/leads", label: "Leads", icon: Target },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/import", label: "Import", icon: Upload },
@@ -32,7 +32,10 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-gray-200 bg-white">
-      <div className="flex h-16 items-center gap-2 border-b border-gray-100 px-5">
+      <Link
+        href="/dashboard"
+        className="flex h-16 items-center gap-2 border-b border-gray-100 px-5 transition-colors hover:bg-gray-50"
+      >
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">
           W
         </div>
@@ -40,13 +43,10 @@ export function Sidebar() {
           <span className="text-sm font-semibold text-gray-900">WarlyWorks</span>
           <span className="text-xs text-gray-400">Outreach CRM</span>
         </div>
-      </div>
+      </Link>
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
         {NAV.map((item) => {
-          const active =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
+          const active = pathname.startsWith(item.href);
           const Icon = item.icon;
           return (
             <Link

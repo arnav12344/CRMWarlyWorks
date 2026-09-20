@@ -56,9 +56,13 @@ the code, so you can add, rename or delete categories from the UI at any time.
 - **Contact detail timeline** — Org, type, editable pipeline stage, verification
   results, sequence status, quick actions, and a merged chronological activity
   timeline.
-- **Daily action dashboard** — The home screen: live counts for follow-ups due
-  today, overdue follow-ups, new replies, drafts to approve, the verification
-  queue, recent bounces, and warm prospects / upcoming meetings.
+- **Daily action dashboard** — The in-app operational home, served at
+  `/dashboard`: live counts for follow-ups due today, overdue follow-ups, new
+  replies, drafts to approve, the verification queue, recent bounces, and warm
+  prospects / upcoming meetings.
+- **Public landing page** — Visiting `/` shows a static marketing page that
+  describes the product, with calls-to-action into the app at `/dashboard` and
+  `/leads`.
 - **Funnel analytics** — Imported → Verified → Contacted → Replied → Positive →
   Meeting with conversion rates, plus breakdowns by contact type and pipeline
   stage.
@@ -90,8 +94,8 @@ the code, so you can add, rename or delete categories from the UI at any time.
    automatically on Asia/Singapore business days.
 10. **Reply / pipeline tracking** — Replies, opens and bounces move contacts
     through your configurable stages; bounces and opt-outs auto-suppress.
-11. **Dashboard & analytics** — The daily action list tells you what to do today;
-    analytics shows the funnel and conversion rates.
+11. **Dashboard & analytics** — The daily action dashboard at `/dashboard` tells
+    you what to do today; analytics shows the funnel and conversion rates.
 
 ---
 
@@ -119,6 +123,10 @@ npm run seed
 # 5. Run the app
 npm run dev                 # http://localhost:3000
 ```
+
+Once running, `http://localhost:3000/` is the public marketing landing page
+(static; describes the product and links into the app), and
+`http://localhost:3000/dashboard` is the live daily action dashboard.
 
 Other scripts: `npm run build`, `npm start`, `npm run lint`, `npm test`.
 
