@@ -11,12 +11,14 @@ import {
   ArrowRight,
   ArrowLeft,
   Loader2,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Select } from "@/components/ui/Select";
+import { Input } from "@/components/ui/Input";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/Table";
 import { Stepper } from "@/components/ui/Stepper";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -146,6 +148,40 @@ export function ImportWizard() {
       .then((d) => setContactTypes(d.contactTypes ?? []))
       .catch(() => setContactTypes([]));
   }, []);
+
+  /**
+   * Create a new tag (contact type) inline and select it. Returns true on
+   * success so the caller can reset its input. If the name already exists we
+   * just select the existing tag.
+   */
+  async function createContactType(name: string): Promise<boolean> {
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    try {
+      const res = await fetch("/api/contact-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.contactType) {
+        setError(data.error ?? "Could not create tag.");
+        return false;
+      }
+      const type = data.contactType as ContactType;
+      setContactTypes((prev) =>
+        prev.some((t) => t.id === type.id)
+          ? prev
+          : [...prev, type].sort((a, b) => a.name.localeCompare(b.name))
+      );
+      setContactTypeId(type.id);
+      setError(null);
+      return true;
+    } catch {
+      setError("Could not create tag.");
+      return false;
+    }
+  }
 
   // Several files: each is auto-mapped and imported in turn.
   const [files, setFiles] = React.useState<File[]>([]);
@@ -294,6 +330,7 @@ export function ImportWizard() {
           contactTypes={contactTypes}
           contactTypeId={contactTypeId}
           setContactTypeId={setContactTypeId}
+          onCreateType={createContactType}
           onBack={() => {
             setMulti(null);
             setStep(0);
@@ -320,6 +357,7 @@ export function ImportWizard() {
           contactTypes={contactTypes}
           contactTypeId={contactTypeId}
           setContactTypeId={setContactTypeId}
+          onCreateType={createContactType}
           busy={busy}
           onBack={() => setStep(1)}
           onRun={runImport}
@@ -577,6 +615,94 @@ function PreviewStep({
   );
 }
 
+/**
+ * Tag (contact type) picker with an inline "add new" mode so a fresh list can
+ * be tagged without leaving the import flow.
+ */
+function TagPicker({
+  contactTypes,
+  contactTypeId,
+  setContactTypeId,
+  onCreateType,
+}: {
+  contactTypes: ContactType[];
+  contactTypeId: string;
+  setContactTypeId: (v: string) => void;
+  onCreateType: (name: string) => Promise<boolean>;
+}) {
+  const [adding, setAdding] = React.useState(false);
+  const [name, setName] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  async function submit() {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    const ok = await onCreateType(name);
+    setSaving(false);
+    if (ok) {
+      setName("");
+      setAdding(false);
+    }
+  }
+
+  if (adding) {
+    return (
+      <div className="flex max-w-sm items-center gap-2">
+        <Input
+          autoFocus
+          value={name}
+          placeholder="New tag name (e.g. Drama schools)"
+          maxLength={60}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void submit();
+            } else if (e.key === "Escape") {
+              setAdding(false);
+              setName("");
+            }
+          }}
+        />
+        <Button size="sm" onClick={() => void submit()} disabled={!name.trim() || saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : "Add"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setAdding(false);
+            setName("");
+          }}
+          disabled={saving}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex max-w-sm items-center gap-2">
+      <Select
+        value={contactTypeId}
+        onChange={(e) => setContactTypeId(e.target.value)}
+        className="flex-1"
+      >
+        <option value="">— no type —</option>
+        {contactTypes.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </Select>
+      <Button size="sm" variant="secondary" onClick={() => setAdding(true)}>
+        <Plus className="h-4 w-4" aria-hidden /> New tag
+      </Button>
+    </div>
+  );
+}
+
 function MappingStep({
   preview,
   mapping,
@@ -584,6 +710,7 @@ function MappingStep({
   contactTypes,
   contactTypeId,
   setContactTypeId,
+  onCreateType,
   busy,
   onBack,
   onRun,
@@ -596,6 +723,7 @@ function MappingStep({
   contactTypes: ContactType[];
   contactTypeId: string;
   setContactTypeId: (v: string) => void;
+  onCreateType: (name: string) => Promise<boolean>;
   busy: boolean;
   onBack: () => void;
   onRun: () => void;
@@ -656,22 +784,15 @@ function MappingStep({
         </CardHeader>
         <CardContent className="space-y-2">
           <p className="text-sm text-gray-500">
-            Choose the type of people/organizations you are importing. These
-            types are editable in Settings — add NGOs, funders, partners or any
-            new type you like.
+            Choose the type of people/organizations you are importing, or add a
+            new tag. Tags are editable later in Settings.
           </p>
-          <Select
-            value={contactTypeId}
-            onChange={(e) => setContactTypeId(e.target.value)}
-            className="max-w-sm"
-          >
-            <option value="">— no type —</option>
-            {contactTypes.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </Select>
+          <TagPicker
+            contactTypes={contactTypes}
+            contactTypeId={contactTypeId}
+            setContactTypeId={setContactTypeId}
+            onCreateType={onCreateType}
+          />
         </CardContent>
       </Card>
 
@@ -803,6 +924,7 @@ function MultiFileStep({
   contactTypes,
   contactTypeId,
   setContactTypeId,
+  onCreateType,
   onBack,
   onRun,
   onReset,
@@ -813,6 +935,7 @@ function MultiFileStep({
   contactTypes: ContactType[];
   contactTypeId: string;
   setContactTypeId: (v: string) => void;
+  onCreateType: (name: string) => Promise<boolean>;
   onBack: () => void;
   onRun: () => void;
   onReset: () => void;
@@ -919,20 +1042,12 @@ function MultiFileStep({
             <CardTitle>Tag all of these organizations as</CardTitle>
           </CardHeader>
           <CardContent>
-            <Select
-              aria-label="Contact type"
-              value={contactTypeId}
-              onChange={(e) => setContactTypeId(e.target.value)}
-              className="max-w-sm"
-              disabled={busy}
-            >
-              <option value="">— no type —</option>
-              {contactTypes.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
+            <TagPicker
+              contactTypes={contactTypes}
+              contactTypeId={contactTypeId}
+              setContactTypeId={setContactTypeId}
+              onCreateType={onCreateType}
+            />
           </CardContent>
         </Card>
       ) : null}

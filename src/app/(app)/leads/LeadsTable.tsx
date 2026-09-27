@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/Table";
-import { Target, Bookmark, ShieldCheck, ListOrdered, Ban } from "lucide-react";
+import { Target, Bookmark, ShieldCheck, ListOrdered, Ban, Trash2 } from "lucide-react";
 
 export interface LeadRow {
   id: string;
@@ -211,6 +211,40 @@ export function LeadsTable({
     router.refresh();
   }
 
+  async function bulkDelete() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (
+      !confirm(
+        `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"} permanently? ` +
+          `This also removes their messages, activities and sequence enrolments. This cannot be undone.`
+      )
+    )
+      return;
+    setBusy(true);
+    setNotice(null);
+    let deleted = 0;
+    let error: string | null = null;
+    for (let i = 0; i < ids.length; i += 100) {
+      const res = await fetch("/api/contacts", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactIds: ids.slice(i, i + 100) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        error = data.error ?? "Delete failed.";
+        break;
+      }
+      deleted += data.deleted ?? 0;
+      setNotice(`Deleting… ${Math.min(i + 100, ids.length)} / ${ids.length}`);
+    }
+    setBusy(false);
+    setSelected(new Set());
+    setNotice(error ?? `Deleted ${deleted} lead${deleted === 1 ? "" : "s"}.`);
+    router.refresh();
+  }
+
   return (
     <div className="space-y-4">
       {/* Filters */}
@@ -306,6 +340,15 @@ export function LeadsTable({
           </div>
           <Button size="sm" variant="secondary" onClick={bulkVerify} disabled={busy}>
             <ShieldCheck className="h-4 w-4" /> Verify
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            className="ml-auto"
+            onClick={bulkDelete}
+            disabled={busy}
+          >
+            <Trash2 className="h-4 w-4" aria-hidden /> Delete
           </Button>
         </div>
       ) : null}
