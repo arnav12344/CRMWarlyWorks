@@ -159,9 +159,27 @@ export class FakeDb {
       this.contacts.find((c) => c.id === where.id) ?? null,
     findFirst: async ({ where }: { where?: Row } = {}) =>
       this.contacts.find((c) => matchWhere(c, where)) ?? null,
+    create: async ({ data }: { data: Row }) => {
+      const row = { id: randomUUID(), createdAt: new Date(), suppressed: false, pipelineStageId: null, ...data };
+      this.contacts.push(row);
+      return row;
+    },
     update: async ({ where, data }: { where: Row; data: Row }) => {
       const row = this.contacts.find((c) => c.id === where.id);
       if (row) Object.assign(row, data);
+      return row;
+    },
+  };
+
+  organization = {
+    findFirst: async ({ where }: { where?: Row } = {}) =>
+      this.organizations.find((o) => matchWhere(o, where)) ?? null,
+    create: async ({ data }: { data: Row }) => {
+      if (this.organizations.some((o) => o.dedupeKey === data.dedupeKey)) {
+        throw new Error("Unique constraint failed on dedupeKey");
+      }
+      const row = { id: randomUUID(), createdAt: new Date(), ...data };
+      this.organizations.push(row);
       return row;
     },
   };

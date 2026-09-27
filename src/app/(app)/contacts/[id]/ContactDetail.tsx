@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Select } from "@/components/ui/Select";
+import { LogSentEmailDialog } from "@/components/LogSentEmailDialog";
 import {
   ArrowLeft,
   Mail,
@@ -217,6 +218,15 @@ export function ContactDetail({
             </Button>
           </Link>
         )}
+        <LogSentEmailDialog
+          contact={{
+            id: contact.id,
+            name: contact.name,
+            // Suppressed contacts can't be logged against (the server refuses too).
+            email: contact.suppressed ? null : contact.email,
+          }}
+          stages={stages}
+        />
         <Button size="sm" variant="secondary" onClick={verify} disabled={busy || !contact.email}>
           <ShieldCheck className="h-4 w-4" /> Verify
         </Button>

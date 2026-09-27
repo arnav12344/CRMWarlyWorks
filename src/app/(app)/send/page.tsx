@@ -4,6 +4,7 @@ import { countSentToday } from "@/lib/outreach";
 import { getDailySendLimit } from "@/lib/verify/settings";
 import { readMailConfig } from "@/lib/mail/config";
 import { SendWorkspace } from "./SendWorkspace";
+import { LogSentEmailDialog } from "@/components/LogSentEmailDialog";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +54,8 @@ export default async function SendPage({
       <PageHeader
         eyebrow="Step 3 of 4"
         title="Write & send"
-        description="Pick leads, choose a template or sequence, preview every personalized email, then send. Nothing goes out until you click Send."
+        description="Pick leads, choose a template or sequence, preview every personalized email, then send. Nothing goes out until you click Send. Sent one from Gmail yourself? Log it so replies and follow-ups are tracked."
+        actions={<LogSentEmailDialog stages={stages.map((s) => ({ id: s.id, name: s.name }))} size="lg" />}
       />
       <SendWorkspace
         initialTab={params.tab === "new" || (queue.length === 0 && params.tab !== "ready") ? "new" : "ready"}
