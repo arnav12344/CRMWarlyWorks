@@ -1,48 +1,45 @@
-import { PageHeader } from "@/components/ui/PageHeader";
-import { Card, CardContent } from "@/components/ui/Card";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { ShieldCheck, KeyRound } from "lucide-react";
 import Link from "next/link";
+import { ArrowRight, KeyRound, ShieldCheck } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Button } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { prisma } from "@/lib/db";
 import { loadProviderKeys } from "@/lib/verify/settings";
-import { hasAnyLiveKey } from "@/lib/verify/service";
+import { verificationMode } from "@/lib/verify/service";
 import { VerificationQueue, type QueueContact } from "./VerificationQueue";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Verification review queue.
- *
- * Server component: loads contacts with emails plus their latest per-provider
- * verification rows, then hands off to a client table for the Verify /
- * Re-verify / Suppress actions.
+ * Step 2: verify emails. Only unchecked addresses are sent to the provider,
+ * so free-tier credits are never spent twice on the same address.
  */
 export default async function VerificationPage() {
   const keys = await loadProviderKeys();
-  const liveMode = hasAnyLiveKey(keys);
+  const mode = verificationMode(keys);
 
-  const contacts = await prisma.contact.findMany({
-    where: { email: { not: null } },
-    orderBy: [{ likelyIndividual: "desc" }, { createdAt: "desc" }],
-    take: 200,
-    include: {
-      organization: { select: { name: true } },
-      verifications: { orderBy: { checkedAt: "desc" } },
-    },
-  });
+  const [contacts, unverifiedCount, leadsWithoutEmail] = await Promise.all([
+    prisma.contact.findMany({
+      where: { email: { not: null } },
+      orderBy: [{ verificationConsensus: { sort: "asc", nulls: "first" } }, { createdAt: "desc" }],
+      take: 500,
+      include: {
+        organization: { select: { name: true } },
+        verifications: { orderBy: { checkedAt: "desc" } },
+      },
+    }),
+    prisma.contact.count({ where: { email: { not: null }, verificationConsensus: null, suppressed: false } }),
+    prisma.contact.count({ where: { email: null } }),
+  ]);
 
   const rows: QueueContact[] = contacts.map((c) => {
-    const latestFor = (provider: string) =>
-      c.verifications.find((v) => v.provider === provider) ?? null;
+    const latestFor = (provider: string) => c.verifications.find((v) => v.provider === provider) ?? null;
     const mv = latestFor("millionverifier") ?? latestFor("mock");
     const zb = latestFor("zerobounce");
     return {
       id: c.id,
       email: c.email ?? "",
-      fullName:
-        c.fullName ||
-        [c.firstName, c.lastName].filter(Boolean).join(" ") ||
-        null,
+      fullName: c.fullName || [c.firstName, c.lastName].filter(Boolean).join(" ") || null,
       organization: c.organization?.name ?? null,
       isRoleInbox: c.isRoleInbox,
       suppressed: c.suppressed,
@@ -50,9 +47,7 @@ export default async function VerificationPage() {
       mailboxType: c.mailboxType,
       likelyIndividual: c.likelyIndividual,
       verifiedAt: c.verifications[0]?.checkedAt?.toISOString() ?? null,
-      millionverifier: mv
-        ? { result: mv.result, quality: mv.quality, mocked: mv.provider === "mock" }
-        : null,
+      millionverifier: mv ? { result: mv.result, quality: mv.quality, mocked: mv.provider === "mock" } : null,
       zerobounce: zb ? { result: zb.result, quality: zb.quality, mocked: false } : null,
     };
   });
@@ -60,40 +55,73 @@ export default async function VerificationPage() {
   return (
     <>
       <PageHeader
-        title="Verification"
-        description="Cross-check email deliverability with MillionVerifier and ZeroBounce. Falls back to manual/mock verification when API keys are absent."
+        eyebrow="Step 2 of 4"
+        title="Verify emails"
+        description="Check addresses before sending so you don't bounce (bounces hurt your Gmail reputation). Only unchecked addresses use credits."
+        actions={
+          <Link href="/send">
+            <Button size="lg" variant="secondary">
+              Next: write &amp; send <ArrowRight className="h-4 w-4" aria-hidden />
+            </Button>
+          </Link>
+        }
       />
 
-      {!liveMode ? (
-        <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <KeyRound className="mt-0.5 h-5 w-5 shrink-0" />
-          <div>
-            <p className="font-semibold">Mock mode — no provider keys configured</p>
-            <p className="mt-1">
-              Verification is running with the built-in offline heuristic
-              verifier so nothing breaks. Add your MillionVerifier and ZeroBounce
-              keys in{" "}
-              <Link href="/settings" className="font-medium underline">
-                Settings
-              </Link>{" "}
-              to run real cross-checks.
-            </p>
-          </div>
+      {mode === "disabled" ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <KeyRound className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+          <p>
+            <span className="font-semibold">Add a verification key to continue.</span> Paste your MillionVerifier or
+            ZeroBounce API key in{" "}
+            <Link href="/settings" className="font-semibold underline">
+              Settings
+            </Link>
+            . Results are never guessed for real outreach.
+          </p>
+        </div>
+      ) : mode === "mock" ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-800">
+          <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden />
+          <p>
+            <span className="font-semibold">Dev mode:</span> no verifier key, so an offline heuristic is used. In
+            production this is disabled until you add a key in{" "}
+            <Link href="/settings" className="font-semibold underline">
+              Settings
+            </Link>
+            .
+          </p>
         </div>
       ) : null}
 
+      {leadsWithoutEmail > 0 ? (
+        <p className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
+          {leadsWithoutEmail} lead{leadsWithoutEmail === 1 ? " has" : "s have"} no email address, so{" "}
+          {leadsWithoutEmail === 1 ? "it isn't" : "they aren't"} listed here. You can still see{" "}
+          {leadsWithoutEmail === 1 ? "its" : "their"} phone and website in{" "}
+          <Link href="/leads" className="font-semibold underline">
+            Leads
+          </Link>
+          .
+        </p>
+      ) : null}
+
       {rows.length === 0 ? (
-        <Card>
-          <CardContent>
-            <EmptyState
-              icon={<ShieldCheck className="h-5 w-5" />}
-              title="No contacts to verify yet"
-              description="Import contacts first, then queue their addresses to check quality, role inboxes, and catch-all domains."
-            />
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={<ShieldCheck className="h-5 w-5" aria-hidden />}
+          title="No emails to verify yet"
+          description={
+            leadsWithoutEmail
+              ? "None of your leads have an email address yet. Import a list that includes an email column."
+              : "Import leads first (Step 1), then come back to check their addresses."
+          }
+          action={
+            <Link href="/import">
+              <Button>Import leads</Button>
+            </Link>
+          }
+        />
       ) : (
-        <VerificationQueue contacts={rows} liveMode={liveMode} />
+        <VerificationQueue contacts={rows} mode={mode} unverifiedCount={unverifiedCount} />
       )}
     </>
   );

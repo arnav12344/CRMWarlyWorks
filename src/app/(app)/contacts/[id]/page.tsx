@@ -51,16 +51,9 @@ export default async function ContactDetailPage({
     });
   }
   for (const m of contact.messages) {
-    if (m.sentAt) {
-      events.push({ kind: "message", at: m.sentAt.toISOString(), title: `Sent: ${m.subject ?? "(no subject)"}`, tag: "sent" });
-    }
-    if (m.openedAt) {
-      events.push({ kind: "message", at: m.openedAt.toISOString(), title: `Opened: ${m.subject ?? ""}`, tag: "opened" });
-    }
-    if (m.repliedAt) {
-      events.push({ kind: "message", at: m.repliedAt.toISOString(), title: `Replied: ${m.subject ?? ""}`, tag: "replied" });
-    }
-    if (m.bouncedAt) {
+    // Sends / replies / bounces are already logged as activities; only
+    // surface bounces here when no activity recorded them (older data).
+    if (m.bouncedAt && !contact.activities.some((a) => a.type === "email_bounced")) {
       events.push({ kind: "message", at: m.bouncedAt.toISOString(), title: `Bounced: ${m.subject ?? ""}`, tag: "bounced" });
     }
   }
@@ -86,6 +79,7 @@ export default async function ContactDetailPage({
     contact.fullName ||
     [contact.firstName, contact.lastName].filter(Boolean).join(" ") ||
     contact.email ||
+    contact.organization?.name ||
     "Unknown contact";
 
   return (
@@ -126,12 +120,19 @@ export default async function ContactDetailPage({
           dueAt: f.dueAt.toISOString(),
           reason: f.reason,
         }))}
-      sentMessages={contact.messages
-        .filter((m) => m.status === "sent" || m.status === "replied" || m.status === "bounced")
+      thread={contact.messages
+        .filter((m) => m.direction === "inbound" || m.sentAt || ["queued", "approved", "failed"].includes(m.status))
+        .sort((a, b) => (a.sentAt ?? a.createdAt).getTime() - (b.sentAt ?? b.createdAt).getTime())
         .map((m) => ({
           id: m.id,
+          direction: m.direction,
           subject: m.subject,
+          body: m.body,
           status: m.status,
+          at: (m.sentAt ?? m.createdAt).toISOString(),
+          repliedAt: m.repliedAt?.toISOString() ?? null,
+          bouncedAt: m.bouncedAt?.toISOString() ?? null,
+          error: m.error,
         }))}
       timeline={events}
     />

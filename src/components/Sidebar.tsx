@@ -1,72 +1,112 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Target,
-  Users,
-  Upload,
-  ShieldCheck,
-  PenSquare,
-  ListOrdered,
-  BarChart3,
-  Settings,
-} from "lucide-react";
+import { Home, ChevronDown, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const NAV = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/leads", label: "Leads", icon: Target },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/import", label: "Import", icon: Upload },
-  { href: "/verification", label: "Verification", icon: ShieldCheck },
-  { href: "/compose", label: "Compose", icon: PenSquare },
-  { href: "/sequences", label: "Sequences", icon: ListOrdered },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
+import { STEPS, MORE_LINKS, stepForPath } from "./steps";
 
 export function Sidebar() {
   const pathname = usePathname();
+  const activeStep = stepForPath(pathname);
+  const moreActive = MORE_LINKS.some((l) => pathname.startsWith(l.href));
+  const [moreOpen, setMoreOpen] = React.useState(moreActive);
+
+  React.useEffect(() => {
+    if (moreActive) setMoreOpen(true);
+  }, [moreActive]);
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-gray-200 bg-white">
-      <Link
-        href="/dashboard"
-        className="flex h-16 items-center gap-2 border-b border-gray-100 px-5 transition-colors hover:bg-gray-50"
-      >
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">
+    <aside className="hidden h-full w-64 shrink-0 flex-col bg-brand-900 text-white md:flex">
+      <Link href="/" className="flex h-16 items-center gap-3 px-5 hover:bg-white/5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-400 text-base font-extrabold text-brand-950">
           W
-        </div>
-        <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold text-gray-900">WarlyWorks</span>
-          <span className="text-xs text-gray-400">Outreach CRM</span>
-        </div>
+        </span>
+        <span className="flex flex-col leading-tight">
+          <span className="text-sm font-bold">WarlyWorks</span>
+          <span className="text-xs text-brand-200">Outreach CRM</span>
+        </span>
       </Link>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {NAV.map((item) => {
-          const active = pathname.startsWith(item.href);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                active
-                  ? "bg-brand-50 text-brand-700"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          );
-        })}
+
+      <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Main">
+        <Link
+          href="/"
+          aria-current={pathname === "/" ? "page" : undefined}
+          className={cn(
+            "mb-4 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium",
+            pathname === "/" ? "bg-white/15 text-white" : "text-brand-100 hover:bg-white/10 hover:text-white"
+          )}
+        >
+          <Home className="h-4 w-4" aria-hidden /> Home
+        </Link>
+
+        <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-brand-300">Your 4 steps</p>
+        <ul className="space-y-1">
+          {STEPS.map((s) => {
+            const active = activeStep?.n === s.n;
+            return (
+              <li key={s.href}>
+                <Link
+                  href={s.href}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                    active ? "bg-white/15 text-white" : "text-brand-100 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <span className={cn("flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold", s.solid)}>
+                    {s.n}
+                  </span>
+                  {s.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="mt-6">
+          <button
+            type="button"
+            onClick={() => setMoreOpen((o) => !o)}
+            aria-expanded={moreOpen}
+            className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-brand-300 hover:bg-white/10 hover:text-white"
+          >
+            More
+            <ChevronDown className={cn("h-4 w-4 transition-transform", moreOpen && "rotate-180")} aria-hidden />
+          </button>
+          {moreOpen ? (
+            <ul className="mt-1 space-y-1">
+              {MORE_LINKS.map((l) => {
+                const active = pathname.startsWith(l.href);
+                const Icon = l.icon;
+                return (
+                  <li key={l.href}>
+                    <Link
+                      href={l.href}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm",
+                        active ? "bg-white/15 text-white" : "text-brand-100 hover:bg-white/10 hover:text-white"
+                      )}
+                    >
+                      <Icon className="h-4 w-4" aria-hidden /> {l.label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
       </nav>
-      <div className="border-t border-gray-100 p-4 text-xs text-gray-400">
-        Cold outreach, organized.
+
+      <div className="border-t border-white/10 p-3">
+        <Link
+          href="/about"
+          className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-brand-200 hover:bg-white/10 hover:text-white"
+        >
+          <Info className="h-3.5 w-3.5" aria-hidden /> About WarlyWorks CRM
+        </Link>
       </div>
     </aside>
   );

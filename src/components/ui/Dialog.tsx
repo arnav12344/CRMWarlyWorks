@@ -38,8 +38,11 @@ export function Dialog({
       onMouseDown={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className={cn(
-          "w-full max-w-lg rounded-xl border border-gray-200 bg-white shadow-xl",
+          "w-full max-w-lg rounded-2xl border border-gray-200 bg-white shadow-xl",
           className
         )}
         onMouseDown={(e) => e.stopPropagation()}

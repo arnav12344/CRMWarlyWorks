@@ -28,42 +28,42 @@ const features = [
     title: "Import messy scraper data",
     description:
       "Drop in CSV or XLSX from any scraper — nested JSON, automatic dedupe, and secret redaction included.",
-    tint: "bg-brand-50 text-brand-600",
+    tint: "bg-brand-50 text-brand-900",
   },
   {
     icon: ShieldCheck,
     title: "Dual email verification",
     description:
-      "MillionVerifier and ZeroBounce consensus checks with a graceful mock fallback when keys are absent.",
-    tint: "bg-accent-50 text-accent-600",
+      "MillionVerifier and ZeroBounce consensus checks that only spend credits on addresses you have not checked yet.",
+    tint: "bg-accent-100 text-brand-950",
   },
   {
     icon: ListOrdered,
     title: "Personalized sequences",
     description:
       "Build multi-step sequences with business-day follow-ups scheduled in Asia/Singapore time.",
-    tint: "bg-brand-50 text-brand-600",
+    tint: "bg-brand-50 text-brand-900",
   },
   {
     icon: MailCheck,
     title: "Email & reply tracking",
     description:
-      "See opens, client activity, and replies so you always know what to send next.",
-    tint: "bg-accent-50 text-accent-600",
+      "Replies, bounces and opt-outs are picked up from your inbox automatically.",
+    tint: "bg-accent-100 text-brand-950",
   },
   {
     icon: BarChart3,
     title: "Pipeline & funnel analytics",
     description:
       "Track every prospect through your pipeline with clear funnel and stage analytics.",
-    tint: "bg-brand-50 text-brand-600",
+    tint: "bg-brand-50 text-brand-900",
   },
   {
     icon: Settings2,
     title: "Data-driven contact types",
     description:
       "Configure contact types from your own data — nothing is hardcoded into the product.",
-    tint: "bg-accent-50 text-accent-600",
+    tint: "bg-accent-100 text-brand-950",
   },
 ];
 
@@ -91,7 +91,7 @@ export default function LandingPage() {
 
         <div className="mx-auto w-full max-w-6xl px-6 py-20 sm:py-28">
           <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-600 text-base font-bold text-white">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-900 text-base font-bold text-white">
               W
             </div>
             <div className="flex flex-col leading-tight">
@@ -108,7 +108,7 @@ export default function LandingPage() {
             </span>
             <h1 className="mt-5 text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl lg:text-6xl">
               Personalized cold outreach,{" "}
-              <span className="text-brand-600">organized</span>.
+              <span className="text-brand-900">organized</span>.
             </h1>
             <p className="mt-6 text-lg leading-relaxed text-gray-600 sm:text-xl">
               WarlyWorks turns messy scraped lead lists into a clean pipeline.
@@ -119,8 +119,8 @@ export default function LandingPage() {
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Link
-                href="/dashboard"
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-brand-600 px-5 text-base font-medium text-white shadow-sm transition-colors hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+                href="/"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-brand-900 px-5 text-base font-medium text-white shadow-sm transition-colors hover:bg-brand-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
               >
                 Open the CRM
                 <ArrowRight className="h-4 w-4" />
@@ -197,9 +197,9 @@ export default function LandingPage() {
               return (
                 <div key={step.label} className="flex items-center">
                   <div className="flex flex-col items-center gap-2">
-                    <div className="relative flex h-14 w-14 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-600 shadow-card">
+                    <div className="relative flex h-14 w-14 items-center justify-center rounded-xl border border-brand-100 bg-white text-brand-900 shadow-card">
                       <Icon className="h-6 w-6" />
-                      <span className="absolute -top-2 -right-2 flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">
+                      <span className="absolute -top-2 -right-2 flex h-6 w-6 items-center justify-center rounded-full bg-brand-900 text-xs font-semibold text-white">
                         {index + 1}
                       </span>
                     </div>
@@ -219,7 +219,7 @@ export default function LandingPage() {
 
       {/* CTA */}
       <section className="mx-auto w-full max-w-6xl px-6 py-16 sm:py-20">
-        <div className="relative overflow-hidden rounded-xl bg-brand-600 px-8 py-12 text-center shadow-card sm:px-12 sm:py-16">
+        <div className="relative overflow-hidden rounded-xl bg-brand-900 px-8 py-12 text-center shadow-card sm:px-12 sm:py-16">
           <div className="pointer-events-none absolute inset-0 -z-0 opacity-40">
             <div className="absolute -top-16 -left-10 h-56 w-56 rounded-full bg-brand-400 blur-3xl" />
             <div className="absolute -bottom-16 -right-10 h-56 w-56 rounded-full bg-accent-500 blur-3xl" />
@@ -234,7 +234,7 @@ export default function LandingPage() {
             </p>
             <div className="mt-8">
               <Link
-                href="/dashboard"
+                href="/"
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-white px-5 text-base font-medium text-brand-700 shadow-sm transition-colors hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-600"
               >
                 Open the CRM
@@ -249,7 +249,7 @@ export default function LandingPage() {
       <footer className="border-t border-gray-100">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-10 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-900 text-sm font-bold text-white">
               W
             </div>
             <div className="flex flex-col leading-tight">
@@ -263,8 +263,8 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-6 text-sm">
             <Link
-              href="/dashboard"
-              className="font-medium text-gray-600 transition-colors hover:text-brand-600"
+              href="/"
+              className="font-medium text-gray-600 transition-colors hover:text-brand-900"
             >
               Open the CRM
             </Link>

@@ -59,6 +59,7 @@ export default async function ContactsPage() {
                       {c.fullName ||
                         [c.firstName, c.lastName].filter(Boolean).join(" ") ||
                         c.email ||
+                        c.organization?.name ||
                         "Unknown"}
                     </Link>
                   </TD>

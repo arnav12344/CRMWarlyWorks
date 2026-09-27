@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
+import { suppressContact } from "@/lib/outreach";
 
 export const runtime = "nodejs";
 
@@ -38,35 +39,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Contact not found." }, { status: 404 });
   }
 
-  await prisma.contact.update({
-    where: { id: contactId },
-    data: { suppressed },
-  });
-
-  const normalizedEmail = normalizeEmail(contact.email);
-  if (normalizedEmail) {
-    if (suppressed) {
-      await prisma.suppression.upsert({
-        where: { email: normalizedEmail },
-        update: { reason: reason ?? "Manually suppressed" },
-        create: { email: normalizedEmail, reason: reason ?? "Manually suppressed" },
-      });
-    } else {
-      await prisma.suppression
-        .delete({ where: { email: normalizedEmail } })
-        .catch(() => undefined);
-    }
+  if (suppressed) {
+    // Also stops sequences and pulls unsent emails out of Ready to send.
+    await suppressContact(prisma, contactId, reason ?? "Manually suppressed");
+    return NextResponse.json({ ok: true, suppressed });
   }
 
+  await prisma.contact.update({ where: { id: contactId }, data: { suppressed: false } });
+  const normalizedEmail = normalizeEmail(contact.email);
+  if (normalizedEmail) {
+    await prisma.suppression.delete({ where: { email: normalizedEmail } }).catch(() => undefined);
+  }
   await prisma.activity.create({
-    data: {
-      contactId,
-      type: suppressed ? "suppressed" : "unsuppressed",
-      summary: suppressed
-        ? `Marked suppressed${reason ? `: ${reason}` : ""}`
-        : "Removed from suppression",
-    },
+    data: { contactId, type: "unsuppressed", summary: "Removed from suppression" },
   });
-
   return NextResponse.json({ ok: true, suppressed });
 }

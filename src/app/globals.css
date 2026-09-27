@@ -12,5 +12,20 @@ body {
 }
 
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  @apply bg-canvas text-gray-900 antialiased;
+}
+
+/* Visible keyboard focus everywhere (links, buttons, custom controls). */
+:focus-visible {
+  outline: 2px solid #3b6ef6;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

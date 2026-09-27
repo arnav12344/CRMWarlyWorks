@@ -28,6 +28,7 @@ import { dedupeOrganizations, computeDedupeKey } from "./dedupe";
 import { emailDomain, isRoleInbox } from "./email";
 import { normalizeEmail } from "@/lib/email";
 import type { ColumnMapping, ImportConfig } from "./mapping";
+import { nextOffset } from "./chunk";
 
 /** A planned organization ready to be persisted. */
 export interface PlannedOrg {
@@ -66,6 +67,47 @@ export interface ImportPlan {
   rowsWithNestedJson: number;
   /** A small preview for the UI summary. */
   sample: Array<{ name: string; email?: string; city?: string; domain?: string }>;
+}
+
+/** Most emails kept per organization (scraper exports can list 20+ branch inboxes). */
+export const MAX_EMAILS_PER_ORG = 5;
+
+const EMAIL_TOKEN = /[A-Z0-9._%+'-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,}/gi;
+
+/** Pull every valid, normalized, de-duplicated email out of a free-text list. */
+export function parseEmailList(value?: string | null): string[] {
+  if (!value) return [];
+  const out: string[] = [];
+  for (const m of value.match(EMAIL_TOKEN) ?? []) {
+    const e = normalizeEmail(m.replace(/^[.'-]+|[.'-]+$/g, ""));
+    // Skip obvious non-contact artefacts (image names, sentry/wix placeholders).
+    if (!e || /\.(png|jpe?g|gif|webp|svg)$/.test(e) || /(sentry|wixpress|example\.com)/.test(e)) continue;
+    if (!out.includes(e)) out.push(e);
+  }
+  return out;
+}
+
+/** Column names (besides the mapped one) that scraper exports use for emails. */
+const EMAIL_COLUMN_RE = /^(recommended[_ -]?emails?|emails?|e[_-]?mails?|email[_-]?addresses|emails?[_-]?\d+|contact[_-]?emails?)$/i;
+
+/**
+ * All emails for a candidate: the scraper's "recommended" pick first, then the
+ * mapped column, then any other email-like column. Capped per organization.
+ */
+function candidateEmails(candidate: BusinessCandidate, mappedValue?: string): string[] {
+  const recommended: string[] = [];
+  const others: string[] = [];
+  for (const [key, val] of Object.entries(candidate.extra)) {
+    if (!EMAIL_COLUMN_RE.test(key.trim())) continue;
+    (/recommended/i.test(key) ? recommended : others).push(val);
+  }
+  const all = [
+    ...recommended.flatMap(parseEmailList),
+    ...parseEmailList(mappedValue),
+    ...parseEmailList(candidate.email),
+    ...others.flatMap(parseEmailList),
+  ];
+  return [...new Set(all)];
 }
 
 /** Split a full name into first/last (best-effort). */
@@ -133,11 +175,13 @@ export function buildImportPlan(
     const { value: candidate } = redactSecrets(raw);
     const name = mapped(candidate, mapping, "orgName", "name");
     const website = mapped(candidate, mapping, "orgWebsite", "website");
-    const email = mapped(candidate, mapping, "contactEmail", "email");
+    const emails = candidateEmails(candidate, mapped(candidate, mapping, "contactEmail", "email"));
     return {
       name: name ?? "",
       website,
-      email,
+      // First email is used for dedupe/domain fallback; all are imported below.
+      email: emails[0],
+      emails,
       phone: mapped(candidate, mapping, "orgPhone", "phone"),
       address: mapped(candidate, mapping, "orgAddress", "address"),
       city: mapped(candidate, mapping, "orgCity", "city"),
@@ -156,21 +200,38 @@ export function buildImportPlan(
   for (const cand of mappedCandidates) {
     const key = computeDedupeKey(cand);
     if (!key) continue;
-    if (!cand.email && !cand.fullName) continue;
+    if (!cand.emails.length && !cand.fullName) continue;
     const list = contactsByKey.get(key) ?? [];
-    // Normalize email casing on write so suppression / dedupe checks agree.
-    const normalizedEmail = normalizeEmail(cand.email);
-    // Avoid duplicate identical emails within one org (compare normalized).
-    if (normalizedEmail && list.some((c) => c.email === normalizedEmail)) continue;
     const nameParts = splitName(cand.fullName);
-    list.push({
-      email: normalizedEmail || undefined,
-      emailDomain: emailDomain(cand.email),
-      isRoleInbox: isRoleInbox(cand.email),
-      fullName: cand.fullName || undefined,
-      firstName: nameParts.firstName,
-      lastName: nameParts.lastName,
-      title: cand.title || undefined,
+    if (!cand.emails.length) {
+      // A named person without an email: keep them (no duplicates by name).
+      if (!list.some((c) => !c.email && c.fullName === cand.fullName)) {
+        list.push({
+          isRoleInbox: false,
+          fullName: cand.fullName || undefined,
+          firstName: nameParts.firstName,
+          lastName: nameParts.lastName,
+          title: cand.title || undefined,
+        });
+      }
+      contactsByKey.set(key, list);
+      continue;
+    }
+    cand.emails.forEach((email, i) => {
+      // Emails are already normalized; skip duplicates and respect the cap.
+      if (list.some((c) => c.email === email)) return;
+      if (list.filter((c) => c.email).length >= MAX_EMAILS_PER_ORG) return;
+      // A named person belongs to the first address only.
+      const person = i === 0 && cand.fullName && !isRoleInbox(email);
+      list.push({
+        email,
+        emailDomain: emailDomain(email),
+        isRoleInbox: isRoleInbox(email),
+        fullName: person ? cand.fullName : undefined,
+        firstName: person ? nameParts.firstName : undefined,
+        lastName: person ? nameParts.lastName : undefined,
+        title: i === 0 ? cand.title || undefined : undefined,
+      });
     });
     contactsByKey.set(key, list);
   }
@@ -229,6 +290,82 @@ function normalizeDomainSafe(input?: string): string | undefined {
   return undefined;
 }
 
+type Db = typeof prisma;
+
+/**
+ * Save an organization's planned contacts, skipping ones that already exist
+ * (same email, or same name for people without an email). An organization
+ * with no email at all still gets one "no email" lead row so it shows up in
+ * Leads (with its phone/website); that row is upgraded in place if a later
+ * import finds an email for it.
+ */
+export async function persistOrgContacts(
+  db: Db,
+  input: {
+    organizationId: string;
+    organizationName: string;
+    contacts: PlannedContact[];
+    source: string;
+    batchId: string;
+  }
+): Promise<{ created: number; upgraded: number }> {
+  const existing = await db.contact.findMany({
+    where: { organizationId: input.organizationId },
+    select: { id: true, email: true, fullName: true },
+  });
+  const emails = new Set(existing.map((c) => c.email).filter(Boolean));
+  const names = new Set(existing.filter((c) => !c.email && c.fullName).map((c) => c.fullName));
+  let placeholder = existing.find((c) => !c.email && !c.fullName) ?? null;
+  let created = 0;
+  let upgraded = 0;
+
+  const log = (contactId: string, isRoleInbox: boolean) =>
+    db.activity.create({
+      data: {
+        contactId,
+        type: "imported",
+        summary: `Imported from ${input.source.replace(/^import:/, "")}`,
+        meta: JSON.stringify({ batchId: input.batchId, organization: input.organizationName, isRoleInbox }),
+      },
+    });
+
+  for (const c of input.contacts) {
+    if (c.email ? emails.has(c.email) : !c.fullName || names.has(c.fullName)) continue;
+    const data = {
+      email: c.email || null,
+      emailDomain: c.emailDomain || null,
+      isRoleInbox: c.isRoleInbox,
+      fullName: c.fullName || null,
+      firstName: c.firstName || null,
+      lastName: c.lastName || null,
+      title: c.title || null,
+    };
+    if (c.email && placeholder) {
+      await db.contact.update({ where: { id: placeholder.id }, data });
+      await log(placeholder.id, c.isRoleInbox);
+      placeholder = null;
+      upgraded += 1;
+    } else {
+      const row = await db.contact.create({
+        data: { ...data, organizationId: input.organizationId, source: input.source },
+      });
+      await log(row.id, c.isRoleInbox);
+      created += 1;
+    }
+    if (c.email) emails.add(c.email);
+    else if (c.fullName) names.add(c.fullName);
+  }
+
+  if (existing.length === 0 && created === 0) {
+    const row = await db.contact.create({
+      data: { organizationId: input.organizationId, source: input.source, isRoleInbox: false },
+    });
+    await log(row.id, false);
+    created += 1;
+  }
+  return { created, upgraded };
+}
+
 export interface ImportSummary {
   batchId: string;
   filename: string;
@@ -238,17 +375,30 @@ export interface ImportSummary {
   redactedSecretCount: number;
   rowsWithNestedJson: number;
   sample: ImportPlan["sample"];
+  /** Orgs handled in THIS request. */
+  processedOrgs: number;
+  contactsCreated: number;
+  /** Offset for the next request, or null when the import is finished. */
+  nextOffset: number | null;
 }
 
 export interface RunImportInput {
   buffer: Buffer;
   filename: string;
   config: ImportConfig;
+  /** Chunking: process plan.orgs[offset, offset+limit). */
+  offset?: number;
+  limit?: number;
+  /** Batch created by the first chunk; later chunks reuse it. */
+  batchId?: string | null;
 }
 
 /**
- * Full import: parse the file, build the plan, and persist Organizations,
- * Contacts, provenance rows, and activities. Returns a summary.
+ * Import one CHUNK: parse the file, build the (deterministic) plan, and
+ * persist organizations [offset, offset+limit) with their contacts. The first
+ * chunk also records the ImportBatch + redacted provenance rows. The browser
+ * calls this repeatedly until `nextOffset` is null, so no single request runs
+ * long enough to hit the serverless time limit.
  *
  * Organizations are upserted by dedupeKey so repeated imports merge rather than
  * duplicate. Only the REDACTED raw rows are stored in ImportRow.raw.
@@ -258,28 +408,33 @@ export async function runImport(input: RunImportInput): Promise<ImportSummary> {
   const parsed = parseFile(buffer, filename);
   const plan = buildImportPlan(parsed.rows, config);
   const contactTypeId = config.contactTypeId || null;
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.max(1, input.limit ?? plan.orgs.length);
 
-  const batch = await prisma.importBatch.create({
-    data: {
-      filename,
-      rowCount: plan.rowCount,
-      orgCount: plan.orgCount,
-      contactCount: plan.contactCount,
-      redactedSecretCount: plan.redactedSecretCount,
-    },
-  });
-
-  // Store redacted provenance rows.
-  if (plan.redactedRows.length) {
-    await prisma.importRow.createMany({
-      data: plan.redactedRows.map((r) => ({
-        importBatchId: batch.id,
-        raw: JSON.stringify(r),
-      })),
+  let batchId = input.batchId ?? null;
+  if (!batchId) {
+    const batch = await prisma.importBatch.create({
+      data: {
+        filename,
+        rowCount: plan.rowCount,
+        orgCount: plan.orgCount,
+        contactCount: plan.contactCount,
+        redactedSecretCount: plan.redactedSecretCount,
+      },
     });
+    batchId = batch.id;
+    if (plan.redactedRows.length) {
+      await prisma.importRow.createMany({
+        data: plan.redactedRows.map((r) => ({ importBatchId: batch.id, raw: JSON.stringify(r) })),
+      });
+    }
   }
+  const batch = { id: batchId };
 
-  for (const org of plan.orgs) {
+  const window = plan.orgs.slice(offset, offset + limit);
+  let contactsCreated = 0;
+
+  for (const org of window) {
     const savedOrg = await prisma.organization.upsert({
       where: { dedupeKey: org.dedupeKey },
       update: {
@@ -310,46 +465,14 @@ export async function runImport(input: RunImportInput): Promise<ImportSummary> {
       },
     });
 
-    for (const contact of org.contacts) {
-      // Skip contacts with no identifying info.
-      if (!contact.email && !contact.fullName) continue;
-
-      // Avoid duplicate contact rows for the same email under the same org.
-      if (contact.email) {
-        const existing = await prisma.contact.findFirst({
-          where: { organizationId: savedOrg.id, email: contact.email },
-          select: { id: true },
-        });
-        if (existing) continue;
-      }
-
-      const created = await prisma.contact.create({
-        data: {
-          organizationId: savedOrg.id,
-          email: contact.email || null,
-          emailDomain: contact.emailDomain || null,
-          isRoleInbox: contact.isRoleInbox,
-          fullName: contact.fullName || null,
-          firstName: contact.firstName || null,
-          lastName: contact.lastName || null,
-          title: contact.title || null,
-          source: `import:${filename}`,
-        },
-      });
-
-      await prisma.activity.create({
-        data: {
-          contactId: created.id,
-          type: "imported",
-          summary: `Imported from ${filename}`,
-          meta: JSON.stringify({
-            batchId: batch.id,
-            organization: savedOrg.name,
-            isRoleInbox: contact.isRoleInbox,
-          }),
-        },
-      });
-    }
+    const r = await persistOrgContacts(prisma, {
+      organizationId: savedOrg.id,
+      organizationName: savedOrg.name,
+      contacts: org.contacts,
+      source: `import:${filename}`,
+      batchId: batch.id,
+    });
+    contactsCreated += r.created;
   }
 
   return {
@@ -361,5 +484,8 @@ export async function runImport(input: RunImportInput): Promise<ImportSummary> {
     redactedSecretCount: plan.redactedSecretCount,
     rowsWithNestedJson: plan.rowsWithNestedJson,
     sample: plan.sample,
+    processedOrgs: window.length,
+    contactsCreated,
+    nextOffset: nextOffset(offset, window.length, plan.orgs.length),
   };
 }

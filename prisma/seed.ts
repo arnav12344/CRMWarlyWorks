@@ -1,139 +1,33 @@
 /**
- * WarlyWorks CRM — full demonstrable seed.
+ * WarlyWorks CRM — DEMO seed (dev only).
  *
- * This wipes the transactional data and reseeds everything the app needs to
- * look alive: editable ContactTypes and PipelineStages (DATA rows, NOT a
- * hardcoded enum — you can add/edit/delete "types of people to contact" like
- * NGOs, Funders, etc. from the UI), a proof-point Snippet library and
- * WarlyWorks/PSLE-English Templates, a couple of multi-step Sequences,
- * ~25 sample Organizations + Contacts across every type with varied
- * verification results, several sequence enrollments, sent/replied/bounced
- * EmailMessages, FollowUps (some due today + some overdue), Suppression
- * entries, and an Activity timeline.
+ * Wipes transactional data and loads ~25 fake organizations/contacts with
+ * sent / replied / bounced history so every page looks alive.
  *
- * `npm run seed` is reset-and-reseed: it clears rows in FK-safe order and
- * rebuilds a consistent snapshot so the dashboard, analytics, leads, verify,
- * compose and sequences pages are all populated.
+ * SAFETY:
+ *   - Refuses to run unless ALLOW_DEMO_SEED=1 (and never with NODE_ENV=production).
+ *   - Every demo email uses the reserved `.example` TLD, so even if you click
+ *     Send on a demo contact, no real school receives anything.
+ *   - Settings (encrypted API keys) are preserved.
  *
- * DESIGN NOTE: contact types and pipeline stages are just rows here. Adding a
- * new category is another entry in CONTACT_TYPES or a click in the UI — there
- * is no enum of "NGO"/"School" anywhere in the code.
+ * Production only needs config data: `npm run seed:config`.
  */
 import { PrismaClient } from "@prisma/client";
+import { seedConfig, CONTACT_TYPES, PIPELINE_STAGES, SNIPPETS, TEMPLATES, SEQUENCES } from "../src/lib/seed/config";
+import { demoSeedBlockedReason, toDemoDomain } from "../src/lib/seed/guard";
+
+const blocked = demoSeedBlockedReason(process.env);
+if (blocked) {
+  console.error(blocked);
+  process.exit(1);
+}
 
 const prisma = new PrismaClient();
 
 const now = new Date();
 
 // ---------------------------------------------------------------------------
-// Editable config DATA
-// ---------------------------------------------------------------------------
-
-const CONTACT_TYPES = [
-  { name: "School", color: "#4f46e5", description: "Primary and secondary schools" },
-  { name: "Tuition Centre", color: "#0ea5e9", description: "Tuition and enrichment centres" },
-  { name: "NGO", color: "#10b981", description: "Non-governmental / community organizations" },
-  { name: "Funder", color: "#f59e0b", description: "Grant makers, foundations and funders" },
-  { name: "Partner", color: "#8b5cf6", description: "Distribution and content partners" },
-  { name: "Educator", color: "#ec4899", description: "Individual teachers and tutors" },
-];
-
-// Funnel-aligned stages. `isPositive`/`isTerminal` drive analytics + dashboard.
-// The outreach engine (src/lib/outreach.ts) and analytics resolve stages by the
-// stable `role` machine key (see src/lib/stageRoles.ts), NOT the display
-// `name`, so users can freely rename these stages without breaking stage
-// movement or the funnel meeting metric. `role` is null for stages with no
-// special machine behavior.
-const PIPELINE_STAGES = [
-  { name: "New", role: null, order: 0, isPositive: false, isTerminal: false },
-  { name: "Verified", role: null, order: 1, isPositive: false, isTerminal: false },
-  { name: "Contacted", role: "contacted", order: 2, isPositive: false, isTerminal: false },
-  { name: "Replied", role: "replied", order: 3, isPositive: true, isTerminal: false },
-  { name: "Positive", role: null, order: 4, isPositive: true, isTerminal: false },
-  { name: "Meeting", role: "meeting", order: 5, isPositive: true, isTerminal: false },
-  { name: "Closed", role: null, order: 6, isPositive: true, isTerminal: true },
-  { name: "Not Interested", role: "not_interested", order: 7, isPositive: false, isTerminal: true },
-];
-
-const SNIPPETS = [
-  {
-    label: "PSLE Proof",
-    category: "Proof point",
-    body: "Students on WarlyWorks PSLE English practised 3x more comprehension passages and saw an average improvement of 1.5 grades over a term.",
-  },
-  {
-    label: "Teacher Time Saved",
-    category: "Proof point",
-    body: "Teachers save ~4 hours a week on marking because WarlyWorks auto-grades open-ended English answers with model-based feedback.",
-  },
-  {
-    label: "Free Pilot",
-    category: "Offer",
-    body: "We can set up a free 4-week pilot for one class — no commitment, and we handle the onboarding.",
-  },
-  {
-    label: "Impact Stat",
-    category: "Proof point",
-    body: "Over 2,000 Singapore students have completed a WarlyWorks PSLE English module this year.",
-  },
-  {
-    label: "Sign-off",
-    category: "Closing",
-    body: "Happy to share a 10-minute walkthrough whenever suits you.",
-  },
-];
-
-const TEMPLATES = [
-  {
-    name: "PSLE English — First Touch",
-    subject: "Helping {{orgName}} lift PSLE English results",
-    body:
-      "Hi {{firstName}},\n\nI'm reaching out from WarlyWorks — we build PSLE English practice that adapts to each student. {{snippet:PSLE Proof}}\n\n{{snippet:Free Pilot}}\n\nWould a short chat be useful for the team at {{orgName}}?\n\n{{snippet:Sign-off}}",
-    variables: ["firstName", "orgName"],
-  },
-  {
-    name: "PSLE English — Follow Up",
-    subject: "Following up: WarlyWorks for {{orgName}}",
-    body:
-      "Hi {{firstName}},\n\nJust floating this back to the top of your inbox. {{snippet:Teacher Time Saved}}\n\nWorth a quick look for {{orgName}}?\n\n{{snippet:Sign-off}}",
-    variables: ["firstName", "orgName"],
-  },
-  {
-    name: "Funder — Impact Intro",
-    subject: "WarlyWorks: measurable PSLE English outcomes for {{orgName}}",
-    body:
-      "Hi {{firstName}},\n\nWarlyWorks helps under-resourced students prepare for PSLE English. {{snippet:Impact Stat}}\n\n{{snippet:PSLE Proof}}\n\nCould we share our impact deck with {{orgName}}?\n\n{{snippet:Sign-off}}",
-    variables: ["firstName", "orgName"],
-  },
-];
-
-const SEQUENCES = [
-  {
-    name: "PSLE English Outreach",
-    isActive: true,
-    steps: [
-      { order: 0, dayOffset: 0, template: "PSLE English — First Touch", stopOnReply: true },
-      { order: 1, dayOffset: 2, template: "PSLE English — Follow Up", stopOnReply: true },
-    ],
-  },
-  {
-    name: "Funder Impact Drip",
-    isActive: true,
-    steps: [
-      { order: 0, dayOffset: 0, template: "Funder — Impact Intro", stopOnReply: true },
-      { order: 1, dayOffset: 3, template: "PSLE English — Follow Up", stopOnReply: true },
-    ],
-  },
-];
-
-// ---------------------------------------------------------------------------
 // Sample organizations + contacts.
-//
-// `verify` describes the varied verification outcome to simulate:
-//   valid | role | catch_all | invalid | unknown
-// `mocked` marks the address as verified via the offline mock verifier.
-// `stage` is the seeded pipeline stage; `journey` drives the messages/
-// follow-ups/activities so the funnel and dashboard have real numbers.
 // ---------------------------------------------------------------------------
 
 type Journey = "new" | "verified" | "drafted" | "contacted" | "replied" | "positive" | "meeting" | "closed" | "bounced";
@@ -153,7 +47,7 @@ interface Seedling {
   journey: Journey;
 }
 
-const SEEDLINGS: Seedling[] = [
+const RAW_SEEDLINGS: Seedling[] = [
   // Schools
   { org: "Rivervale Primary School", website: "rivervaleprimary.edu.sg", city: "Singapore", type: "School", first: "Grace", last: "Tan", title: "Head of English", email: "grace.tan@rivervaleprimary.edu.sg", verify: "valid", journey: "meeting" },
   { org: "Northlight Academy", website: "northlight.edu.sg", city: "Singapore", type: "School", first: "Daniel", last: "Lim", title: "Vice Principal", email: "daniel.lim@northlight.edu.sg", verify: "valid", journey: "replied" },
@@ -192,12 +86,17 @@ const SEEDLINGS: Seedling[] = [
   { org: "Independent Tutor — Mr. Farid", website: "", city: "Singapore", type: "Educator", first: "Farid", last: "Hassan", title: "Language Tutor", email: "farid.badaddress@nowhere.invalid", verify: "invalid", journey: "bounced" },
 ];
 
-// ---------------------------------------------------------------------------
-// Verification result mapping (mirrors src/lib/verify aggregation buckets).
-// ---------------------------------------------------------------------------
+/** Rewrite every demo address/website onto the reserved .example TLD. */
+const SEEDLINGS: Seedling[] = RAW_SEEDLINGS.map((s) => {
+  const [local, domain = "demo"] = s.email.split("@");
+  return {
+    ...s,
+    email: `${local}@${toDemoDomain(domain)}`,
+    website: s.website ? toDemoDomain(s.website) : "",
+  };
+});
 
 function verificationRows(kind: VerifyKind, mocked: boolean) {
-  // provider result strings mirror EmailVerification.result buckets.
   const provider = mocked ? "mock" : "millionverifier";
   const base = { provider, isFree: false, isRole: false, isDisposable: false, isCatchAll: false };
   switch (kind) {
@@ -215,7 +114,6 @@ function verificationRows(kind: VerifyKind, mocked: boolean) {
   }
 }
 
-// Which pipeline stage each journey lands on.
 const JOURNEY_STAGE: Record<Journey, string> = {
   new: "New",
   verified: "Verified",
@@ -238,12 +136,7 @@ function isRoleInbox(email: string): boolean {
   return ROLE_LOCALPARTS.has(local);
 }
 
-// ---------------------------------------------------------------------------
-// Reset (FK-safe order) then reseed.
-// ---------------------------------------------------------------------------
-
 async function reset() {
-  // Child tables first.
   await prisma.importRow.deleteMany();
   await prisma.importBatch.deleteMany();
   await prisma.activity.deleteMany();
@@ -265,90 +158,28 @@ async function reset() {
 
 async function main() {
   await reset();
+  const { typeByName, stageByName, templateByName, sequenceByName } = await seedConfig(prisma);
 
-  // Contact types + stages
-  const typeByName: Record<string, string> = {};
-  for (const t of CONTACT_TYPES) {
-    const row = await prisma.contactType.create({ data: t });
-    typeByName[t.name] = row.id;
-  }
-
-  const stageByName: Record<string, string> = {};
-  for (const s of PIPELINE_STAGES) {
-    const row = await prisma.pipelineStage.create({ data: s });
-    stageByName[s.name] = row.id;
-  }
-
-  // Snippets
-  for (const s of SNIPPETS) {
-    await prisma.snippet.create({ data: s });
-  }
-
-  // Templates
-  const templateByName: Record<string, string> = {};
-  for (const t of TEMPLATES) {
-    const row = await prisma.template.create({
-      data: {
-        name: t.name,
-        subject: t.subject,
-        body: t.body,
-        variables: JSON.stringify(t.variables),
-      },
-    });
-    templateByName[t.name] = row.id;
-  }
-
-  // Sequences + steps
-  const sequenceByName: Record<string, string> = {};
-  for (const seq of SEQUENCES) {
-    const row = await prisma.sequence.create({
-      data: {
-        name: seq.name,
-        isActive: seq.isActive,
-        steps: {
-          create: seq.steps.map((st) => ({
-            order: st.order,
-            dayOffset: st.dayOffset,
-            templateId: templateByName[st.template],
-            stopOnReply: st.stopOnReply,
-          })),
-        },
-      },
-    });
-    sequenceByName[seq.name] = row.id;
-  }
-
-  // Organizations + contacts + full journey
   let orgCount = 0;
   let contactCount = 0;
 
   for (const s of SEEDLINGS) {
     orgCount += 1;
-    const domain = s.website || (s.email.includes("@") ? s.email.split("@")[1] : null);
-    // Individual educators share free-mail domains (gmail/yahoo), so key on the
-    // org name for them to avoid a false dedupe collision.
-    const freeDomain = domain
-      ? ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com"].includes(domain.toLowerCase())
-      : false;
-    const dedupeKey =
-      domain && !freeDomain
-        ? `domain:${domain.toLowerCase()}`
-        : `name:${s.org.toLowerCase()}`;
+    const domain = s.email.split("@")[1];
     const org = await prisma.organization.create({
       data: {
         name: s.org,
         website: s.website || null,
-        domain: domain ? domain.toLowerCase() : null,
+        domain,
         city: s.city,
         country: "Singapore",
         contactTypeId: typeByName[s.type] ?? null,
         source: "seed",
-        dedupeKey,
+        dedupeKey: `name:${s.org.toLowerCase()}`,
       },
     });
 
     const fullName = [s.first, s.last].filter(Boolean).join(" ") || null;
-    const stageName = JOURNEY_STAGE[s.journey];
     const contact = await prisma.contact.create({
       data: {
         organizationId: org.id,
@@ -357,9 +188,9 @@ async function main() {
         fullName,
         title: s.title || null,
         email: s.email,
-        emailDomain: s.email.includes("@") ? s.email.split("@")[1].toLowerCase() : null,
+        emailDomain: domain,
         isRoleInbox: isRoleInbox(s.email),
-        pipelineStageId: stageByName[stageName] ?? null,
+        pipelineStageId: stageByName[JOURNEY_STAGE[s.journey]] ?? null,
         status: s.journey === "new" ? "new" : "active",
         suppressed: s.journey === "bounced",
         source: "seed",
@@ -368,17 +199,10 @@ async function main() {
     contactCount += 1;
 
     await prisma.activity.create({
-      data: {
-        contactId: contact.id,
-        type: "imported",
-        summary: `Imported from ${s.type} list`,
-        createdAt: daysAgo(20),
-      },
+      data: { contactId: contact.id, type: "imported", summary: `Imported from ${s.type} list`, createdAt: daysAgo(20) },
     });
 
-    // Verification: everyone past "new" is verified; "verified"+ journeys too.
-    const verified = s.journey !== "new";
-    if (verified) {
+    if (s.journey !== "new") {
       const v = verificationRows(s.verify, s.mocked ?? false);
       for (const r of v.rows) {
         await prisma.emailVerification.create({
@@ -399,11 +223,7 @@ async function main() {
       }
       await prisma.contact.update({
         where: { id: contact.id },
-        data: {
-          verificationConsensus: v.consensus,
-          mailboxType: v.mailbox,
-          likelyIndividual: v.individual,
-        },
+        data: { verificationConsensus: v.consensus, mailboxType: v.mailbox, likelyIndividual: v.individual },
       });
       await prisma.activity.create({
         data: {
@@ -418,42 +238,18 @@ async function main() {
     await buildJourney(contact.id, s, sequenceByName, templateByName);
   }
 
-  // A couple of extra suppression entries (opt-outs not tied to a bounce).
   await prisma.suppression.upsert({
-    where: { email: "unsubscribe@oldlist.sg" },
+    where: { email: "unsubscribe@oldlist.example" },
     update: {},
-    create: { email: "unsubscribe@oldlist.sg", reason: "opt-out" },
-  });
-
-  // A provenance import batch so the Import page shows history.
-  await prisma.importBatch.create({
-    data: {
-      filename: "google-maps-scraper-export.csv",
-      rowCount: 48,
-      orgCount,
-      contactCount,
-      redactedSecretCount: 3,
-      createdAt: daysAgo(20),
-      rows: {
-        create: [
-          { raw: JSON.stringify({ name: "Rivervale Primary School", api_key: "[REDACTED]", city: "Singapore" }) },
-          { raw: JSON.stringify({ name: "BrightMinds Tuition", token: "[REDACTED]", website: "brightminds.sg" }) },
-        ],
-      },
-    },
+    create: { email: "unsubscribe@oldlist.example", reason: "opt-out" },
   });
 
   console.log(
-    `Seed complete: ${CONTACT_TYPES.length} contact types, ${PIPELINE_STAGES.length} stages, ` +
+    `Demo seed complete: ${CONTACT_TYPES.length} contact types, ${PIPELINE_STAGES.length} stages, ` +
       `${SNIPPETS.length} snippets, ${TEMPLATES.length} templates, ${SEQUENCES.length} sequences, ` +
-      `${orgCount} organizations, ${contactCount} contacts, plus messages / follow-ups / activity.`
+      `${orgCount} organizations, ${contactCount} contacts (all on .example domains).`
   );
 }
-
-// ---------------------------------------------------------------------------
-// Journey builder: creates messages, enrollments, follow-ups and activity so
-// each contact's history is consistent with its pipeline stage.
-// ---------------------------------------------------------------------------
 
 async function buildJourney(
   contactId: string,
@@ -462,69 +258,48 @@ async function buildJourney(
   templateByName: Record<string, string>
 ) {
   const j = s.journey;
-  if (j === "new" || j === "verified") return; // no outbound yet
+  if (j === "new" || j === "verified") return;
 
-  // "drafted" — a personalized message sitting in the review-before-send queue.
+  const subject = `Helping ${s.org} lift PSLE English results`;
+  const body = `Hi ${s.first || "there"},\n\nReaching out from WarlyWorks about PSLE English practice for ${s.org}.`;
+
   if (j === "drafted") {
-    const draftTemplate =
-      s.type === "Funder" ? "Funder — Impact Intro" : "PSLE English — First Touch";
+    const draftTemplate = s.type === "Funder" ? "Funder — Impact Intro" : "PSLE English — First Touch";
     await prisma.emailMessage.create({
       data: {
         contactId,
         templateId: templateByName[draftTemplate] ?? null,
         direction: "outbound",
-        subject: `Helping ${s.org} lift PSLE English results`,
-        body: `Hi ${s.first || "there"},\n\nReaching out from WarlyWorks about PSLE English practice for ${s.org}.`,
+        toAddress: s.email,
+        subject,
+        body,
         status: "queued",
         createdAt: daysAgo(1),
       },
     });
     await prisma.activity.create({
-      data: {
-        contactId,
-        type: "email_queued",
-        summary: "Drafted and queued for review",
-        createdAt: daysAgo(1),
-      },
+      data: { contactId, type: "email_queued", summary: `Added to Ready to send: ${subject}`, createdAt: daysAgo(1) },
     });
     return;
   }
 
-  // Enroll everyone contacted+ into an appropriate sequence.
   const seqName = s.type === "Funder" ? "Funder Impact Drip" : "PSLE English Outreach";
-  const firstTemplate =
-    s.type === "Funder" ? "Funder — Impact Intro" : "PSLE English — First Touch";
-
-  const enrollmentStatus =
-    j === "replied" || j === "positive" || j === "meeting" || j === "closed"
-      ? "stopped"
-      : j === "bounced"
-      ? "stopped"
-      : "active";
-  const stoppedReason =
-    j === "bounced" ? "bounced" : enrollmentStatus === "stopped" ? "replied" : null;
-
+  const firstTemplate = s.type === "Funder" ? "Funder — Impact Intro" : "PSLE English — First Touch";
+  const stopped = j !== "contacted";
   const enrollment = await prisma.sequenceEnrollment.create({
     data: {
       contactId,
       sequenceId: sequenceByName[seqName],
-      status: enrollmentStatus,
+      status: stopped ? "stopped" : "active",
       currentStep: 1,
-      stoppedReason,
+      stoppedReason: j === "bounced" ? "bounced" : stopped ? "replied" : null,
       enrolledAt: daysAgo(10),
     },
   });
   await prisma.activity.create({
-    data: {
-      contactId,
-      type: "sequence_enrolled",
-      summary: `Enrolled in ${seqName}`,
-      createdAt: daysAgo(10),
-    },
+    data: { contactId, type: "sequence_enrolled", summary: `Enrolled in ${seqName}`, createdAt: daysAgo(10) },
   });
 
-  // Bounces are kept recent (within 7 days) so the dashboard "Recent bounces"
-  // card is populated.
   const sentAt = j === "bounced" ? daysAgo(4) : daysAgo(8);
   const firstTouch = await prisma.emailMessage.create({
     data: {
@@ -532,32 +307,22 @@ async function buildJourney(
       sequenceEnrollmentId: enrollment.id,
       templateId: templateByName[firstTemplate] ?? null,
       direction: "outbound",
-      subject: `Helping ${s.org} lift PSLE English results`,
-      body: `Hi ${s.first || "there"},\n\nReaching out from WarlyWorks about PSLE English practice for ${s.org}.`,
+      toAddress: s.email,
+      subject,
+      body,
       status: j === "bounced" ? "bounced" : "sent",
       sentAt,
       bouncedAt: j === "bounced" ? daysAgo(4) : null,
     },
   });
   await prisma.activity.create({
-    data: {
-      contactId,
-      type: "email_sent",
-      summary: `Sent (simulated): Helping ${s.org} lift PSLE English results`,
-      createdAt: sentAt,
-    },
+    data: { contactId, type: "email_sent", summary: `Sent: ${subject}`, createdAt: sentAt },
   });
 
   if (j === "bounced") {
     await prisma.activity.create({
-      data: {
-        contactId,
-        type: "email_bounced",
-        summary: "Bounced (simulated)",
-        createdAt: daysAgo(4),
-      },
+      data: { contactId, type: "email_bounced", summary: "Bounced — address does not exist", createdAt: daysAgo(4) },
     });
-    // suppression row for the bounced contact
     await prisma.suppression.upsert({
       where: { email: s.email },
       update: { reason: "bounced" },
@@ -566,83 +331,45 @@ async function buildJourney(
     return;
   }
 
-  // Contacted-only: schedule follow-ups, some overdue, some due today.
   if (j === "contacted") {
-    // Overdue follow-up (in the past)
     await prisma.followUp.create({
-      data: {
-        contactId,
-        dueAt: daysAgo(2),
-        reason: "Follow-up 2 business days after send",
-        businessDaysOffset: 2,
-        status: "pending",
-      },
+      data: { contactId, dueAt: daysAgo(2), reason: "Follow-up 2 business days after send", businessDaysOffset: 2, status: "pending" },
     });
-    // Follow-up due today
     await prisma.followUp.create({
-      data: {
-        contactId,
-        dueAt: endOfToday(),
-        reason: "Follow-up 3 business days after send",
-        businessDaysOffset: 3,
-        status: "pending",
-      },
+      data: { contactId, dueAt: endOfToday(), reason: "Follow-up 3 business days after send", businessDaysOffset: 3, status: "pending" },
     });
     return;
   }
 
-  // replied / positive / meeting / closed all have an inbound reply.
   const repliedAt = daysAgo(5);
-  await prisma.emailMessage.update({
-    where: { id: firstTouch.id },
-    data: { openedAt: daysAgo(7), repliedAt },
-  });
+  await prisma.emailMessage.update({ where: { id: firstTouch.id }, data: { repliedAt } });
   await prisma.emailMessage.create({
     data: {
       contactId,
       direction: "inbound",
-      subject: `Re: Helping ${s.org} lift PSLE English results`,
+      fromAddress: s.email,
+      subject: `Re: ${subject}`,
       body: "Thanks for reaching out — this looks interesting. Can you tell me more?",
       status: "replied",
       repliedAt,
+      createdAt: repliedAt,
     },
   });
   await prisma.activity.create({
-    data: {
-      contactId,
-      type: "email_replied",
-      summary: "Replied (simulated)",
-      createdAt: repliedAt,
-    },
+    data: { contactId, type: "email_replied", summary: `Replied: Re: ${subject}`, createdAt: repliedAt },
   });
 
   if (j === "meeting" || j === "positive" || j === "closed") {
     await prisma.activity.create({
-      data: {
-        contactId,
-        type: "stage_changed",
-        summary: `Moved to ${JOURNEY_STAGE[j]}`,
-        createdAt: daysAgo(3),
-      },
+      data: { contactId, type: "stage_changed", summary: `Moved to ${JOURNEY_STAGE[j]}`, createdAt: daysAgo(3) },
     });
   }
   if (j === "meeting") {
-    // upcoming meeting reminder due today
     await prisma.followUp.create({
-      data: {
-        contactId,
-        dueAt: endOfToday(),
-        reason: "Prep for intro call",
-        businessDaysOffset: 0,
-        status: "pending",
-      },
+      data: { contactId, dueAt: endOfToday(), reason: "Prep for intro call", businessDaysOffset: 0, status: "pending" },
     });
   }
 }
-
-// ---------------------------------------------------------------------------
-// Date helpers
-// ---------------------------------------------------------------------------
 
 function daysAgo(n: number): Date {
   const d = new Date(now);
@@ -651,8 +378,9 @@ function daysAgo(n: number): Date {
 }
 
 function endOfToday(): Date {
+  // 17:00 Singapore time today (09:00 UTC).
   const d = new Date(now);
-  d.setHours(17, 0, 0, 0);
+  d.setUTCHours(9, 0, 0, 0);
   return d;
 }
 

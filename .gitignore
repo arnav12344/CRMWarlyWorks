@@ -19,9 +19,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
+# local env files (all of them, except the template)
 .env
-.env*.local
+.env*
+!.env.example
 
 # database
 dev.db
@@ -32,3 +33,9 @@ prisma/dev.db-journal
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# netlify
+.netlify/
+
+# local helper scripts / logs
+/.tools/

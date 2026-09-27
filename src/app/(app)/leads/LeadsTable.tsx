@@ -151,34 +151,63 @@ export function LeadsTable({
     if (!enrollSeq || selected.size === 0) return;
     setBusy(true);
     setNotice(null);
-    const res = await fetch("/api/sequences/enroll", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sequenceId: enrollSeq, contactIds: [...selected] }),
-    });
-    const data = await res.json().catch(() => ({}));
+    const ids = [...selected];
+    let enrolled = 0;
+    let skipped = 0;
+    let queued = 0;
+    let error: string | null = null;
+    for (let i = 0; i < ids.length; i += 100) {
+      const res = await fetch("/api/sequences/enroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sequenceId: enrollSeq, contactIds: ids.slice(i, i + 100) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        error = data.error ?? "Enroll failed.";
+        break;
+      }
+      enrolled += data.enrolled;
+      skipped += data.skipped;
+      queued += data.queuedMessages;
+    }
     setBusy(false);
     setSelected(new Set());
     setNotice(
-      res.ok
-        ? `Enrolled ${data.enrolled}, skipped ${data.skipped} (suppressed). Queued ${data.queuedMessages} message(s) for review.`
-        : (data.error ?? "Enroll failed.")
+      error ??
+        `Enrolled ${enrolled}${skipped ? `, skipped ${skipped} (suppressed or no email)` : ""}. ${queued} first email(s) are waiting in Write & send → Ready to send.`
     );
     router.refresh();
   }
 
   async function bulkVerify() {
-    if (selected.size === 0) return;
+    const ids = rows.filter((r) => selected.has(r.id) && !r.verification && r.email).map((r) => r.id);
+    if (ids.length === 0) {
+      setNotice("Everyone selected is already verified (or has no email) — no credits used.");
+      return;
+    }
+    if (!confirm(`Verify ${ids.length} unchecked email${ids.length === 1 ? "" : "s"}? This uses verifier credits.`)) return;
     setBusy(true);
     setNotice(null);
-    const res = await fetch("/api/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contactIds: [...selected] }),
-    });
+    let verified = 0;
+    let error: string | null = null;
+    for (let i = 0; i < ids.length; i += 10) {
+      const res = await fetch("/api/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactIds: ids.slice(i, i + 10) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        error = data.error ?? "Verification failed.";
+        break;
+      }
+      verified += data.verified ?? 0;
+      setNotice(`Verifying… ${Math.min(i + 10, ids.length)} / ${ids.length}`);
+    }
     setBusy(false);
     setSelected(new Set());
-    setNotice(res.ok ? "Verification run complete." : "Verification failed.");
+    setNotice(error ?? `Verified ${verified} email${verified === 1 ? "" : "s"}.`);
     router.refresh();
   }
 
@@ -256,8 +285,8 @@ export function LeadsTable({
 
       {/* Bulk actions */}
       {selected.size > 0 ? (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm">
-          <span className="font-medium text-brand-800">{selected.size} selected</span>
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm">
+          <span className="font-semibold text-brand-900">{selected.size} selected</span>
           <div className="flex items-center gap-2">
             <Select
               className="h-8 w-48"
@@ -272,7 +301,7 @@ export function LeadsTable({
               ))}
             </Select>
             <Button size="sm" onClick={bulkEnroll} disabled={busy || !enrollSeq}>
-              <ListOrdered className="h-4 w-4" /> Enroll
+              <ListOrdered className="h-4 w-4" aria-hidden /> Add to sequence
             </Button>
           </div>
           <Button size="sm" variant="secondary" onClick={bulkVerify} disabled={busy}>
@@ -292,8 +321,17 @@ export function LeadsTable({
           <CardContent>
             <EmptyState
               icon={<Target className="h-5 w-5" />}
-              title="No leads match"
-              description="Adjust the filters, or import a Google Maps scraper CSV/XLSX to populate leads."
+              title={rows.length === 0 ? "No leads yet" : "No leads match"}
+              description={
+                rows.length === 0
+                  ? "Import a CSV or XLSX of schools, tuition centres or partners to get started."
+                  : "Adjust the filters, or import more leads."
+              }
+              action={
+                <Link href="/import">
+                  <Button>Import CSV / XLSX</Button>
+                </Link>
+              }
             />
           </CardContent>
         </Card>
@@ -330,7 +368,11 @@ export function LeadsTable({
                     <Link href={`/contacts/${r.id}`} className="font-medium text-brand-700 hover:underline">
                       {r.name}
                     </Link>
-                    <div className="text-xs text-gray-400">{r.email}</div>
+                    {r.email ? (
+                      <div className="text-xs text-gray-500">{r.email}</div>
+                    ) : (
+                      <Badge tone="neutral" className="mt-1">No email found</Badge>
+                    )}
                     {r.suppressed ? (
                       <Badge tone="danger" className="mt-1">
                         <Ban className="mr-1 h-3 w-3" /> Suppressed

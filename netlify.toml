@@ -1,0 +1,17 @@
+# Netlify build config. The Next.js runtime (OpenNext adapter) is detected
+# automatically; this file only pins the build command and functions folder.
+# Secrets are NOT stored here — set them under Site configuration → Environment variables.
+[build]
+  # Migrations + idempotent config seed run on Netlify's build servers (they can
+  # reach Supabase's :5432 session pooler), then the Next.js build.
+  # CLI deploys build locally. If you later connect the GitHub repo for
+  # Netlify-side builds, switch this to "npm run build:netlify" (also migrates).
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  # Scheduled function: netlify/functions/tick.mts (every 10 minutes).
+  directory = "netlify/functions"

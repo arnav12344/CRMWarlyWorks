@@ -82,7 +82,7 @@ export default async function AnalyticsPage() {
     { key: "verified", label: "Verified", value: verified, tone: "bg-indigo-400" },
     { key: "contacted", label: "Contacted", value: contacted, tone: "bg-brand-500" },
     { key: "replied", label: "Replied", value: replied, tone: "bg-sky-500" },
-    { key: "positive", label: "Positive", value: positive, tone: "bg-accent-500" },
+    { key: "positive", label: "Positive", value: positive, tone: "bg-accent-400" },
     { key: "meeting", label: "Meeting", value: meeting, tone: "bg-emerald-600" },
   ];
 
@@ -141,9 +141,9 @@ export default async function AnalyticsPage() {
         title="Analytics"
         description="Your outreach funnel: imported → verified → contacted → replied → positive → meeting."
         actions={
-          <Link href="/dashboard">
+          <Link href="/">
             <span className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-              Back to dashboard
+              Back to home
             </span>
           </Link>
         }
@@ -247,7 +247,7 @@ export default async function AnalyticsPage() {
                 </div>
                 <div className="h-4 w-full overflow-hidden rounded bg-gray-100">
                   <div
-                    className={`h-full rounded ${s.isPositive ? "bg-accent-500" : "bg-brand-500"}`}
+                    className={`h-full rounded ${s.isPositive ? "bg-emerald-500" : "bg-brand-700"}`}
                     style={{ width: `${Math.max((s.count / stageMax) * 100, s.count > 0 ? 3 : 0)}%` }}
                   />
                 </div>

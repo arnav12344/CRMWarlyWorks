@@ -6,11 +6,17 @@
 
 generator client {
   provider = "prisma-client-js"
+  // "native" for local dev; rhel-openssl-3.0.x for Netlify's Lambda runtime.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
+// Supabase Postgres. DATABASE_URL is the pooled (Supavisor transaction mode,
+// port 6543, ?pgbouncer=true&connection_limit=1) string used at runtime;
+// DIRECT_URL is the session/direct string (port 5432) used for migrations.
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 /// Editable "types of people/organizations to contact". Seeded, not enumerated.
@@ -182,7 +188,20 @@ model EmailMessage {
   direction            String              @default("outbound") // outbound | inbound
   subject              String?
   body                 String?
-  status               String              @default("draft") // draft | queued | approved | sent | bounced | replied
+  // draft | queued | approved | sending | sent | failed | bounced | replied
+  // (inbound rows use: replied | autoreply | optout | bounce_notice)
+  status               String              @default("draft")
+  fromAddress          String?
+  toAddress            String?
+  /// RFC 5322 Message-ID header (angle brackets stripped). Used to thread replies.
+  messageIdHeader      String?             @unique
+  /// For inbound mail: the Message-ID it replied to.
+  inReplyTo            String?
+  /// Last send error (status failed).
+  error                String?
+  /// When this message should be sent. Null = send as soon as you click Send /
+  /// Send all. A future time = the scheduled job releases it then.
+  scheduledFor         DateTime?
   sentAt               DateTime?
   openedAt             DateTime?
   repliedAt            DateTime?
@@ -190,6 +209,9 @@ model EmailMessage {
   createdAt            DateTime            @default(now())
 
   @@index([contactId])
+  @@index([status])
+  @@index([sentAt])
+  @@index([scheduledFor])
 }
 
 model Activity {

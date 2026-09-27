@@ -76,10 +76,16 @@ export function renderString(
       return body;
     }
 
-    const value = context[token];
+    // Apollo-style fallback: {{firstName|there}} uses "there" when empty.
+    const pipe = token.indexOf("|");
+    const name = (pipe >= 0 ? token.slice(0, pipe) : token).trim();
+    const fallback = pipe >= 0 ? token.slice(pipe + 1).trim() : null;
+
+    const value = context[name];
     if (value == null || value === "") {
-      missing.add(token);
-      return missingPlaceholder(token);
+      if (fallback != null) return fallback;
+      missing.add(name);
+      return missingPlaceholder(name);
     }
     return value;
   });
@@ -166,7 +172,7 @@ export function extractVariables(template: string): string[] {
   while ((m = re.exec(template ?? "")) != null) {
     const token = m[1].trim();
     if (!token.toLowerCase().startsWith("snippet:")) {
-      found.add(token);
+      found.add(token.split("|")[0].trim());
     }
   }
   return [...found];

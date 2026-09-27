@@ -14,6 +14,9 @@ export const SETTING_KEYS = {
   millionverifier: "millionverifier_api_key",
   zerobounce: "zerobounce_api_key",
   timezone: "app_timezone",
+  dailySendLimit: "daily_send_limit",
+  imapState: "imap_state",
+  imapLastSync: "imap_last_sync",
 } as const;
 
 export type ProviderKeyName = "millionverifier" | "zerobounce";
@@ -64,4 +67,11 @@ export function maskKey(plaintext: string | null): string | null {
   if (!plaintext) return null;
   const last4 = plaintext.slice(-4);
   return `••••••••${last4}`;
+}
+
+/** Daily send cap (Singapore day). Defaults to 50. */
+export async function getDailySendLimit(): Promise<number> {
+  const raw = await getPlainSetting(SETTING_KEYS.dailySendLimit, "50");
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 500) : 50;
 }

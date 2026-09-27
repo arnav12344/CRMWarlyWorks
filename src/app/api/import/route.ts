@@ -120,8 +120,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // Chunked: the browser calls "run" repeatedly with the returned nextOffset.
+  const offset = Number(form.get("offset") ?? 0) || 0;
+  const limit = Math.min(Math.max(Number(form.get("limit") ?? 40) || 40, 1), 100);
+  const batchIdField = form.get("batchId");
+  const batchId = typeof batchIdField === "string" && batchIdField ? batchIdField : null;
+
   try {
-    const summary = await runImport({ buffer, filename: file.name, config });
+    const summary = await runImport({ buffer, filename: file.name, config, offset, limit, batchId });
     return NextResponse.json({ mode: "run", ...summary });
   } catch (err) {
     return NextResponse.json(

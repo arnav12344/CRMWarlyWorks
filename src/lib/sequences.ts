@@ -1,21 +1,24 @@
 /**
  * Multi-step sequence (drip) engine.
  *
- * `advanceEnrollments()` walks active enrollments and, for any whose next step
- * is due (by business-day offset from enrollment), drafts the next
- * EmailMessage. Enrollments STOP automatically when the contact has replied,
- * bounced, or is suppressed — outreach never continues against someone who
- * asked to stop or whose mailbox is dead.
+ * `advanceEnrollments()` walks active enrollments and, when the next step is
+ * due, drafts its EmailMessage into "Ready to send" (status "queued"). Nothing
+ * is sent automatically — the user always clicks Send.
  *
- * Sending itself is SIMULATED elsewhere (see src/lib/outreach.ts); this engine
- * only produces draft/queued messages for the review queue.
+ * Timing: step 1 is due `dayOffset` business days after enrollment. Later
+ * steps are due (their dayOffset − previous dayOffset) business days after the
+ * PREVIOUS step was actually sent, and never while the previous step is still
+ * sitting unsent — so a follow-up can't jump ahead of the first email.
+ *
+ * Enrollments STOP automatically when the contact replied, bounced, or is
+ * suppressed.
  */
 
 import type { PrismaClient } from "@prisma/client";
 import { addBusinessDays, APP_TIMEZONE } from "./reminders";
 import { buildMergeContext, renderEmail, type MergeSnippet } from "./merge";
+import { normalizeEmail } from "./email";
 
-/** Minimal Prisma surface used here — keeps the function unit-testable. */
 type Db = PrismaClient;
 
 export interface AdvanceResult {
@@ -24,16 +27,8 @@ export interface AdvanceResult {
   advancedEnrollmentIds: string[];
 }
 
-/**
- * Reasons an enrollment auto-stops. Kept as data (strings), not an enum, to
- * match the rest of the schema.
- */
 export type StopReason = "replied" | "bounced" | "suppressed";
 
-/**
- * Determine whether an enrollment should stop, based on the contact's state
- * and message history. Returns the stop reason or null to continue.
- */
 export function shouldStopEnrollment(params: {
   contactSuppressed: boolean;
   hasReplied: boolean;
@@ -45,20 +40,16 @@ export function shouldStopEnrollment(params: {
   return null;
 }
 
-/**
- * Advance all active sequence enrollments. For each active enrollment:
- *  - stop it if the contact is suppressed / has replied / has bounced;
- *  - otherwise, if the next step's business-day offset is due, draft the
- *    next EmailMessage and increment currentStep (completing the enrollment
- *    when the last step is drafted).
- *
- * `now` is injectable for testing. Messages are created as status "queued" so
- * they land in the review-before-send queue.
- */
+export interface AdvanceOptions {
+  /** Only consider these enrollments (e.g. the ones just created). */
+  enrollmentIds?: string[];
+}
+
 export async function advanceEnrollments(
   db: Db,
   now: Date = new Date(),
-  timeZone: string = APP_TIMEZONE
+  timeZone: string = APP_TIMEZONE,
+  opts: AdvanceOptions = {}
 ): Promise<AdvanceResult> {
   const result: AdvanceResult = {
     createdMessageIds: [],
@@ -66,30 +57,32 @@ export async function advanceEnrollments(
     advancedEnrollmentIds: [],
   };
 
+  const where: Record<string, unknown> = { status: "active" };
+  if (opts.enrollmentIds) where.id = { in: opts.enrollmentIds };
+
   const enrollments = await db.sequenceEnrollment.findMany({
-    where: { status: "active" },
+    where,
     include: {
-      contact: {
-        include: {
-          organization: true,
-          messages: true,
-        },
-      },
+      contact: { include: { organization: true, messages: true } },
       sequence: {
-        include: {
-          steps: {
-            orderBy: { order: "asc" },
-            include: { template: true },
-          },
-        },
+        include: { steps: { orderBy: { order: "asc" }, include: { template: true } } },
       },
     },
   });
+  if (enrollments.length === 0) return result;
 
-  // Load suppression list once for the emails in play.
-  const emails = enrollments
-    .map((e) => e.contact.email)
-    .filter((e): e is string => !!e);
+  // Snippet library, so {{snippet:Label}} resolves in sequence emails too.
+  const snippetRows = await db.snippet.findMany();
+  const snippets: MergeSnippet[] = snippetRows.map((s) => ({ label: s.label, body: s.body }));
+
+  // Suppression list for the emails in play (normalized, case-insensitive).
+  const emails = [
+    ...new Set(
+      enrollments
+        .map((e) => normalizeEmail(e.contact.email))
+        .filter((e): e is string => !!e)
+    ),
+  ];
   const suppressedRows = emails.length
     ? await db.suppression.findMany({ where: { email: { in: emails } } })
     : [];
@@ -97,14 +90,10 @@ export async function advanceEnrollments(
 
   for (const enrollment of enrollments) {
     const contact = enrollment.contact;
-    const emailSuppressed =
-      !!contact.email && suppressedSet.has(contact.email.toLowerCase());
-    const hasReplied =
-      contact.messages.some((m) => m.status === "replied") ||
-      contact.messages.some((m) => m.repliedAt != null);
-    const hasBounced =
-      contact.messages.some((m) => m.status === "bounced") ||
-      contact.messages.some((m) => m.bouncedAt != null);
+    const normalized = normalizeEmail(contact.email);
+    const emailSuppressed = !!normalized && suppressedSet.has(normalized);
+    const hasReplied = contact.messages.some((m) => m.status === "replied" || m.repliedAt != null);
+    const hasBounced = contact.messages.some((m) => m.status === "bounced" || m.bouncedAt != null);
 
     const stop = shouldStopEnrollment({
       contactSuppressed: contact.suppressed || emailSuppressed,
@@ -131,22 +120,26 @@ export async function advanceEnrollments(
     const steps = enrollment.sequence.steps;
     const nextStep = steps[enrollment.currentStep];
     if (!nextStep) {
-      // No more steps — mark complete.
-      await db.sequenceEnrollment.update({
-        where: { id: enrollment.id },
-        data: { status: "completed" },
-      });
+      await db.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: "completed" } });
       continue;
     }
 
-    // Due when enrolledAt + dayOffset business days <= now.
-    const dueAt = addBusinessDays(enrollment.enrolledAt, nextStep.dayOffset, timeZone);
-    if (dueAt.getTime() > now.getTime()) {
-      continue; // not due yet
+    // When is the next step due?
+    let dueAt: Date | null;
+    const prevStep = enrollment.currentStep > 0 ? steps[enrollment.currentStep - 1] : null;
+    const prevMessage = contact.messages
+      .filter((m) => m.sequenceEnrollmentId === enrollment.id && m.direction !== "inbound")
+      .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())[0];
+    if (prevStep && prevMessage) {
+      dueAt = prevMessage.sentAt
+        ? addBusinessDays(new Date(prevMessage.sentAt), Math.max(0, nextStep.dayOffset - prevStep.dayOffset), timeZone)
+        : null; // previous step not sent yet — wait
+    } else {
+      dueAt = addBusinessDays(enrollment.enrolledAt, nextStep.dayOffset, timeZone);
     }
+    if (!dueAt || dueAt.getTime() > now.getTime()) continue;
 
     const template = nextStep.template;
-    const snippets: MergeSnippet[] = [];
     const context = buildMergeContext({
       firstName: contact.firstName,
       lastName: contact.lastName,
@@ -173,6 +166,7 @@ export async function advanceEnrollments(
         sequenceEnrollmentId: enrollment.id,
         templateId: template?.id ?? null,
         direction: "outbound",
+        toAddress: normalized,
         subject: rendered.subject,
         body: rendered.body,
         status: "queued",
@@ -192,7 +186,7 @@ export async function advanceEnrollments(
       data: {
         contactId: contact.id,
         type: "sequence_step_queued",
-        summary: `Queued step ${nextStep.order + 1} of "${enrollment.sequence.name}"`,
+        summary: `Step ${nextStep.order + 1} of "${enrollment.sequence.name}" is ready to send`,
       },
     });
     result.advancedEnrollmentIds.push(enrollment.id);

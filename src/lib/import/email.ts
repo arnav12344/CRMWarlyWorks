@@ -17,6 +17,19 @@ export const ROLE_INBOX_LOCALPARTS = new Set([
   "contact",
   "admin",
   "office",
+  "general",
+  "generaloffice",
+  "reception",
+  "sales",
+  "support",
+  "team",
+  "hr",
+  "careers",
+  "marketing",
+  "mail",
+  "enquire",
+  "inquiry",
+  "inquiries",
 ]);
 
 /** Extract the lowercased domain from an email address. */

@@ -10,12 +10,12 @@ import {
   CardTitle,
 } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
+import { Badge, statusTone } from "@/components/ui/Badge";
 import { Select } from "@/components/ui/Select";
 import {
   ArrowLeft,
   Mail,
-  MailCheck,
+  MailOpen,
   MailX,
   Clock,
   ShieldCheck,
@@ -24,6 +24,18 @@ import {
   CalendarClock,
   Activity as ActivityIcon,
 } from "lucide-react";
+
+export interface ThreadMessage {
+  id: string;
+  direction: string;
+  subject: string | null;
+  body: string | null;
+  status: string;
+  at: string;
+  repliedAt: string | null;
+  bouncedAt: string | null;
+  error: string | null;
+}
 
 export interface TimelineEvent {
   kind: "activity" | "message" | "followup" | "verification";
@@ -74,7 +86,7 @@ export function ContactDetail({
   verifications,
   enrollments,
   openFollowUps,
-  sentMessages,
+  thread,
   timeline,
 }: {
   contact: ContactHeader;
@@ -82,7 +94,7 @@ export function ContactDetail({
   verifications: { id: string; provider: string; result: string | null; quality: string | null; checkedAt: string }[];
   enrollments: { id: string; sequenceName: string; status: string; currentStep: number; stoppedReason: string | null }[];
   openFollowUps: { id: string; dueAt: string; reason: string | null }[];
-  sentMessages: { id: string; subject: string | null; status: string }[];
+  thread: ThreadMessage[];
   timeline: TimelineEvent[];
 }) {
   const router = useRouter();
@@ -129,17 +141,6 @@ export function ContactDetail({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ contactId: contact.id, suppressed: !contact.suppressed }),
-    });
-    setBusy(false);
-    router.refresh();
-  }
-
-  async function simulate(messageId: string, action: string) {
-    setBusy(true);
-    await fetch("/api/messages/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messageId, action }),
     });
     setBusy(false);
     router.refresh();
@@ -205,16 +206,17 @@ export function ContactDetail({
 
       {/* Quick actions */}
       <div className="flex flex-wrap gap-2">
-        <Link href="/compose">
-          <Button size="sm" disabled={contact.suppressed}>
-            <Mail className="h-4 w-4" /> Compose
+        {contact.suppressed || !contact.email ? (
+          <Button size="sm" disabled>
+            <Mail className="h-4 w-4" aria-hidden /> Write email
           </Button>
-        </Link>
-        <Link href="/leads">
-          <Button size="sm" variant="secondary">
-            <ListOrdered className="h-4 w-4" /> Enroll (from leads)
-          </Button>
-        </Link>
+        ) : (
+          <Link href={`/send?tab=new&contactId=${contact.id}`}>
+            <Button size="sm">
+              <Mail className="h-4 w-4" aria-hidden /> Write email
+            </Button>
+          </Link>
+        )}
         <Button size="sm" variant="secondary" onClick={verify} disabled={busy || !contact.email}>
           <ShieldCheck className="h-4 w-4" /> Verify
         </Button>
@@ -233,6 +235,50 @@ export function ContactDetail({
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
+          {/* Email thread (real sends + replies picked up from the inbox) */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Emails</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {thread.length === 0 ? (
+                <p className="text-sm text-gray-600">No emails yet.</p>
+              ) : (
+                <ol className="space-y-3">
+                  {thread.map((m) => {
+                    const inbound = m.direction === "inbound";
+                    return (
+                      <li
+                        key={m.id}
+                        className={
+                          inbound
+                            ? "mr-8 rounded-xl border border-sky-200 bg-sky-50 p-4"
+                            : "ml-8 rounded-xl border border-gray-200 bg-white p-4"
+                        }
+                      >
+                        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
+                            {inbound ? <MailOpen className="h-3.5 w-3.5" aria-hidden /> : <Mail className="h-3.5 w-3.5" aria-hidden />}
+                            {inbound ? "They wrote" : "You sent"} · {fmt(m.at)}
+                          </span>
+                          <Badge tone={statusTone(m.status)}>{m.status === "queued" ? "ready to send" : m.status}</Badge>
+                        </div>
+                        <p className="text-sm font-semibold text-gray-900">{m.subject || "(no subject)"}</p>
+                        <p className="mt-1 line-clamp-[12] whitespace-pre-wrap text-sm text-gray-800">{m.body}</p>
+                        {m.error ? <p className="mt-2 text-xs text-red-800">Error: {m.error}</p> : null}
+                        {m.bouncedAt ? (
+                          <p className="mt-2 flex items-center gap-1 text-xs text-red-800">
+                            <MailX className="h-3.5 w-3.5" aria-hidden /> Bounced {fmt(m.bouncedAt)}
+                          </p>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Timeline */}
           <Card>
             <CardHeader>
@@ -260,43 +306,7 @@ export function ContactDetail({
             </CardContent>
           </Card>
 
-          {/* Simulate tracking on sent messages */}
-          {sentMessages.length ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Simulate tracking</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-xs text-gray-500">
-                  Demo the tracking flow: simulate an open, reply, or bounce on a sent
-                  message. Replies/bounces stop active sequences; bounces add the
-                  contact to the suppression list.
-                </p>
-                {sentMessages.map((m) => (
-                  <div
-                    key={m.id}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
-                  >
-                    <span className="text-sm text-gray-700">
-                      {m.subject ?? "(no subject)"}{" "}
-                      <Badge tone="neutral">{m.status}</Badge>
-                    </span>
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => simulate(m.id, "open")} disabled={busy}>
-                        <MailCheck className="h-4 w-4" /> Open
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => simulate(m.id, "reply")} disabled={busy}>
-                        <Mail className="h-4 w-4" /> Reply
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => simulate(m.id, "bounce")} disabled={busy}>
-                        <MailX className="h-4 w-4 text-red-500" /> Bounce
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ) : null}
+
         </div>
 
         <div className="space-y-6">

@@ -66,7 +66,8 @@ const GUESS_PATTERNS: Record<MappableField, RegExp> = {
   orgCity: /^(city|town|locality)$/i,
   orgCountry: /^(country|nation)$/i,
   orgCategories: /^(categor(y|ies)|business[_-]?type|tags|sector)$/i,
-  contactEmail: /^(email|e[_-]?mail|email[_-]?address|contact[_-]?email)$/i,
+  // Singular or plural; scraper exports use "emails" / "recommended_emails".
+  contactEmail: /^(recommended[_ -]?emails?|emails?|e[_-]?mails?|email[_-]?address(es)?|contact[_-]?emails?)$/i,
   contactFullName: /^(full[_-]?name|contact[_-]?name|person|owner|contact[_-]?person)$/i,
   contactTitle: /^(job[_-]?title|title|role|position|designation)$/i,
 };

@@ -5,12 +5,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "build:netlify": "prisma generate && prisma migrate deploy && tsx prisma/seed-config.ts && next build",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "seed": "tsx prisma/seed.ts"
-  },
-  "prisma": {
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "seed:config": "tsx prisma/seed-config.ts",
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
@@ -18,8 +19,11 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
+    "imapflow": "2.0.8",
     "lucide-react": "^0.469.0",
+    "mailparser": "3.9.28",
     "next": "^15.5.25",
+    "nodemailer": "10.0.11",
     "papaparse": "^5.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -28,7 +32,9 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/mailparser": "3.4.6",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "8.0.2",
     "@types/papaparse": "^5.3.15",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",

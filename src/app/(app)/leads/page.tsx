@@ -1,4 +1,7 @@
+import Link from "next/link";
+import { Upload, ArrowRight } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Button } from "@/components/ui/Button";
 import { prisma } from "@/lib/db";
 import { LeadsTable, type LeadRow } from "./LeadsTable";
 
@@ -44,6 +47,7 @@ export default async function LeadsPage() {
         c.fullName ||
         [c.firstName, c.lastName].filter(Boolean).join(" ") ||
         c.email ||
+        c.organization?.name ||
         "Unknown",
       email: c.email,
       orgName: c.organization?.name ?? null,
@@ -63,8 +67,23 @@ export default async function LeadsPage() {
   return (
     <>
       <PageHeader
-        title="Leads"
-        description="Apollo-style prospecting table. Filter, save segments, and bulk-enroll or verify. Suppressed contacts are flagged and never messaged."
+        eyebrow="Step 1 of 4"
+        title="Add leads"
+        description="Import a CSV/XLSX (Google Maps scraper exports welcome), then filter and pick who to contact. Suppressed contacts are flagged and never emailed."
+        actions={
+          <>
+            <Link href="/import">
+              <Button size="lg">
+                <Upload className="h-4 w-4" aria-hidden /> Import CSV / XLSX
+              </Button>
+            </Link>
+            <Link href="/verification">
+              <Button size="lg" variant="secondary">
+                Next: verify <ArrowRight className="h-4 w-4" aria-hidden />
+              </Button>
+            </Link>
+          </>
+        }
       />
       <LeadsTable
         rows={rows}

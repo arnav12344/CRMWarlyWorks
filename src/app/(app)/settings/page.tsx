@@ -3,8 +3,10 @@ import {
   SETTING_KEYS,
   loadProviderKeys,
   getPlainSetting,
+  getDailySendLimit,
   maskKey,
 } from "@/lib/verify/settings";
+import { readMailConfig } from "@/lib/mail/config";
 import { SettingsForm } from "./SettingsForm";
 
 export const dynamic = "force-dynamic";
@@ -12,32 +14,29 @@ export const dynamic = "force-dynamic";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
 
 /**
- * Settings: encrypted provider API keys + general config.
- *
- * Server component only ever passes masked (last-4) previews to the client —
- * plaintext keys never leave the server.
+ * Settings: email account status (from env), verifier keys (encrypted, masked),
+ * daily send limit and timezone. Plaintext secrets never reach the browser.
  */
 export default async function SettingsPage() {
-  const keys = await loadProviderKeys();
-  const timezone = await getPlainSetting(SETTING_KEYS.timezone, DEFAULT_TIMEZONE);
+  const [keys, timezone, dailySendLimit] = await Promise.all([
+    loadProviderKeys(),
+    getPlainSetting(SETTING_KEYS.timezone, DEFAULT_TIMEZONE),
+    getDailySendLimit(),
+  ]);
+  const mail = readMailConfig();
 
   return (
     <>
-      <PageHeader
-        title="Settings"
-        description="Encrypted provider API keys and general configuration."
-      />
+      <PageHeader title="Settings" description="Email account, verification keys and sending limits." />
       <SettingsForm
         initial={{
-          millionverifier: {
-            configured: Boolean(keys.millionverifier),
-            masked: maskKey(keys.millionverifier),
-          },
-          zerobounce: {
-            configured: Boolean(keys.zerobounce),
-            masked: maskKey(keys.zerobounce),
-          },
+          mail: mail
+            ? { configured: true, user: mail.user, fromAddress: mail.fromAddress, fromName: mail.fromName }
+            : { configured: false, user: null, fromAddress: null, fromName: null },
+          millionverifier: { configured: Boolean(keys.millionverifier), masked: maskKey(keys.millionverifier) },
+          zerobounce: { configured: Boolean(keys.zerobounce), masked: maskKey(keys.zerobounce) },
           timezone,
+          dailySendLimit,
         }}
       />
     </>

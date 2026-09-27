@@ -18,21 +18,41 @@ import { aggregate, type Consensus } from "./aggregate";
 import { loadProviderKeys, type ProviderKeys } from "./settings";
 
 /**
- * Build the verifier set from provider keys. When a key is missing, that
- * provider is represented by the offline mock (tagged with the mock provider),
- * so the aggregation still gets two data points and never crashes.
+ * How verification runs:
+ *   - "live":     at least one real provider key is configured; ONLY real
+ *                 providers run (each costs 1 credit per address).
+ *   - "mock":     no keys, not production — offline heuristic for dev/demo.
+ *   - "disabled": no keys in production — never invent results for real mail.
  */
-export function buildVerifiers(keys: ProviderKeys): EmailVerifier[] {
-  const verifiers: EmailVerifier[] = [];
-  verifiers.push(
-    keys.millionverifier
-      ? new MillionVerifier(keys.millionverifier)
-      : new MockVerifier()
-  );
-  verifiers.push(
-    keys.zerobounce ? new ZeroBounce(keys.zerobounce) : new MockVerifier()
-  );
-  return verifiers;
+export type VerificationMode = "live" | "mock" | "disabled";
+
+export function verificationMode(
+  keys: ProviderKeys,
+  nodeEnv: string | undefined = process.env.NODE_ENV
+): VerificationMode {
+  if (hasAnyLiveKey(keys)) return "live";
+  return nodeEnv === "production" ? "disabled" : "mock";
+}
+
+/** Build the verifier set for a mode. Live mode never mixes in mock results. */
+export function buildVerifiers(
+  keys: ProviderKeys,
+  mode: VerificationMode = verificationMode(keys)
+): EmailVerifier[] {
+  if (mode === "live") {
+    const verifiers: EmailVerifier[] = [];
+    if (keys.millionverifier) verifiers.push(new MillionVerifier(keys.millionverifier));
+    if (keys.zerobounce) verifiers.push(new ZeroBounce(keys.zerobounce));
+    return verifiers;
+  }
+  if (mode === "mock") return [new MockVerifier()];
+  return [];
+}
+
+/** Credits a run will consume: one per address per live provider. */
+export function estimateCredits(addressCount: number, keys: ProviderKeys): number {
+  const providers = (keys.millionverifier ? 1 : 0) + (keys.zerobounce ? 1 : 0);
+  return Math.max(0, addressCount) * providers;
 }
 
 export interface VerifyEmailOutcome {
@@ -82,10 +102,13 @@ export async function verifyEmail(
  */
 export async function verifyContact(
   contactId: string,
-  keysOverride?: ProviderKeys
+  keysOverride?: ProviderKeys,
+  opts: { force?: boolean } = {}
 ): Promise<VerifyEmailOutcome | null> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return null;
+  // Never spend credits re-checking an address that already has a result.
+  if (contact.verificationConsensus && !opts.force) return null;
 
   const email = contact.email?.trim();
   if (!email) {
@@ -106,6 +129,7 @@ export async function verifyContact(
 
   const keys = keysOverride ?? (await loadProviderKeys());
   const verifiers = buildVerifiers(keys);
+  if (verifiers.length === 0) return null; // disabled (production, no key)
   const outcome = await verifyEmail(email, verifiers);
 
   // Persist one EmailVerification row per provider result.
@@ -153,23 +177,20 @@ export async function verifyContact(
   return outcome;
 }
 
-/** Verify many contacts sequentially. Never throws for individual failures. */
+/**
+ * Verify a small batch of contacts (the UI sends ~10 at a time to stay inside
+ * the serverless time limit). Already-verified contacts are skipped.
+ */
 export async function verifyContacts(
   contactIds: string[]
-): Promise<{ verified: number; skipped: number }> {
+): Promise<{ verified: number; skipped: number; mode: VerificationMode }> {
   const keys = await loadProviderKeys();
-  let verified = 0;
-  let skipped = 0;
-  for (const id of contactIds) {
-    try {
-      const outcome = await verifyContact(id, keys);
-      if (outcome) verified += 1;
-      else skipped += 1;
-    } catch {
-      skipped += 1;
-    }
-  }
-  return { verified, skipped };
+  const mode = verificationMode(keys);
+  if (mode === "disabled") return { verified: 0, skipped: contactIds.length, mode };
+  // Run a few in parallel; providers handle this fine and it keeps batches fast.
+  const results = await Promise.allSettled(contactIds.map((id) => verifyContact(id, keys)));
+  const verified = results.filter((r) => r.status === "fulfilled" && r.value).length;
+  return { verified, skipped: contactIds.length - verified, mode };
 }
 
 /** True when at least one live provider key is configured. */
