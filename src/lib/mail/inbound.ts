@@ -170,6 +170,25 @@ export async function cancelQueuedSequenceMail(db: Db, contactId: string): Promi
   return res.count;
 }
 
+/**
+ * Pull the user's standalone, write-your-own follow-ups (linked to a first
+ * email via parentMessageId, not to a sequence) out of the send queue when the
+ * contact replies. They move to "draft" (recoverable, not deleted) and lose
+ * their schedule so releaseScheduled won't send them.
+ */
+export async function cancelScheduledFollowUps(db: Db, contactId: string): Promise<number> {
+  const res = await db.emailMessage.updateMany({
+    where: {
+      contactId,
+      direction: "outbound",
+      status: { in: ["waiting", "queued", "approved"] },
+      parentMessageId: { not: null },
+    },
+    data: { status: "draft", scheduledFor: null, followUpAfterDays: null },
+  });
+  return res.count;
+}
+
 export async function processInbound(
   db: Db,
   mails: InboundMail[],
@@ -264,6 +283,8 @@ export async function processInbound(
       data: { status: "done", completedAt: mail.date },
     });
     await cancelQueuedSequenceMail(db, contactId);
+    // Also stop the user's write-your-own follow-ups (not tied to a sequence).
+    await cancelScheduledFollowUps(db, contactId);
 
     if (c.kind === "optout") {
       await db.activity.create({

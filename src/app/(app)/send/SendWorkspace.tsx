@@ -16,11 +16,13 @@ import {
   Loader2,
   Mail,
   PenSquare,
+  Plus,
   RotateCcw,
   Send,
   SkipForward,
   Sparkles,
   Square,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
@@ -101,6 +103,17 @@ interface Option {
 }
 
 type Tab = "ready" | "new";
+
+/** A write-your-own follow-up drafted in the composer (before it's saved). */
+interface FollowUpDraft {
+  subject: string;
+  body: string;
+  /** "afterDays" = N business days after the previous email; "date" = a fixed day. */
+  whenKind: "afterDays" | "date";
+  days: number;
+  /** "YYYY-MM-DD" in Singapore time (a 09:00 SGT send is used). */
+  date: string;
+}
 
 const SEND_GAP_MS = 3000; // pause between sends in "Send all" (gentle on Gmail)
 
@@ -506,6 +519,154 @@ function EditForm({
 
 const WIZARD_STEPS = ["Pick leads", "Choose message", "Preview & add"] as const;
 
+/** Every follow-up needs a subject and a valid schedule value. */
+function followUpsValid(followUps: FollowUpDraft[]): boolean {
+  return followUps.every(
+    (f) =>
+      f.subject.trim().length > 0 &&
+      (f.whenKind === "afterDays" ? f.days >= 1 && f.days <= 60 : f.date.trim().length > 0)
+  );
+}
+
+/** Default local "YYYY-MM-DD" a few days out, for the date picker. */
+function defaultFollowUpDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 3);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Editor for write-your-own follow-ups (subject/body + when to send). */
+function FollowUpsEditor({
+  followUps,
+  setFollowUps,
+  templates,
+}: {
+  followUps: FollowUpDraft[];
+  setFollowUps: React.Dispatch<React.SetStateAction<FollowUpDraft[]>>;
+  templates: TemplateDTO[];
+}) {
+  function add() {
+    setFollowUps((list) => [
+      ...list,
+      {
+        subject: "",
+        body: "",
+        whenKind: "afterDays",
+        days: list.length === 0 ? 2 : 3,
+        date: defaultFollowUpDate(),
+      },
+    ]);
+  }
+  function update(i: number, patch: Partial<FollowUpDraft>) {
+    setFollowUps((list) => list.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  }
+  function remove(i: number) {
+    setFollowUps((list) => list.filter((_, idx) => idx !== i));
+  }
+
+  return (
+    <fieldset className="space-y-3 rounded-xl border border-gray-200 p-4">
+      <legend className="flex items-center gap-2 px-1 text-sm font-semibold text-brand-950">
+        <CalendarClock className="h-4 w-4" aria-hidden /> Follow-ups
+      </legend>
+      <p className="text-xs text-gray-600">
+        These send automatically after the first email, and stop the moment the lead replies. Timing is in Singapore
+        business days.
+      </p>
+
+      {followUps.map((f, i) => (
+        <div key={i} className="space-y-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-gray-800">Follow-up {i + 1}</span>
+            <Button size="sm" variant="ghost" onClick={() => remove(i)} aria-label={`Remove follow-up ${i + 1}`}>
+              <Trash2 className="h-4 w-4" aria-hidden /> Remove
+            </Button>
+          </div>
+
+          {templates.length ? (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">Fill from a template (optional)</span>
+              <Select
+                value=""
+                onChange={(e) => {
+                  const t = templates.find((x) => x.id === e.target.value);
+                  if (t) update(i, { subject: t.subject, body: t.body });
+                }}
+              >
+                <option value="">Choose a template…</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          ) : null}
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-gray-600">Subject</span>
+            <Input value={f.subject} onChange={(e) => update(i, { subject: e.target.value })} placeholder="e.g. Following up on my note" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-gray-600">Body</span>
+            <Textarea
+              className="min-h-[120px]"
+              value={f.body}
+              onChange={(e) => update(i, { body: e.target.value })}
+              placeholder="Write the follow-up, or leave blank to fill from a template."
+            />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-gray-800">
+              <input
+                type="radio"
+                name={`when-${i}`}
+                checked={f.whenKind === "afterDays"}
+                onChange={() => update(i, { whenKind: "afterDays" })}
+              />
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={f.days}
+                disabled={f.whenKind !== "afterDays"}
+                onChange={(e) => update(i, { days: Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 1)) })}
+                className="h-8 w-16 rounded-lg border border-gray-300 px-2 text-sm disabled:bg-gray-100"
+                aria-label={`Business days after previous email for follow-up ${i + 1}`}
+              />
+              business days after the previous email
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-800">
+              <input
+                type="radio"
+                name={`when-${i}`}
+                checked={f.whenKind === "date"}
+                onChange={() => update(i, { whenKind: "date" })}
+              />
+              on
+              <input
+                type="date"
+                value={f.date}
+                disabled={f.whenKind !== "date"}
+                onChange={(e) => update(i, { date: e.target.value })}
+                className="h-8 rounded-lg border border-gray-300 px-2 text-sm disabled:bg-gray-100"
+                aria-label={`Send date for follow-up ${i + 1}`}
+              />
+              <span className="text-xs text-gray-500">9am SGT</span>
+            </label>
+          </div>
+        </div>
+      ))}
+
+      <Button size="sm" variant="secondary" onClick={add} disabled={followUps.length >= 10}>
+        <Plus className="h-4 w-4" aria-hidden /> Add follow-up
+      </Button>
+    </fieldset>
+  );
+}
+
 function NewEmailWizard({
   contacts,
   templates,
@@ -530,11 +691,12 @@ function NewEmailWizard({
   const [selected, setSelected] = React.useState<Set<string>>(
     new Set(preselectContactId && contacts.some((c) => c.id === preselectContactId) ? [preselectContactId] : [])
   );
-  const [mode, setMode] = React.useState<"single" | "sequence">("single");
+  const [mode, setMode] = React.useState<"single" | "followups" | "sequence">("single");
   const [templateId, setTemplateId] = React.useState(templates[0]?.id ?? "");
   const [subject, setSubject] = React.useState(templates[0]?.subject ?? "");
   const [body, setBody] = React.useState(templates[0]?.body ?? "");
   const [sequenceId, setSequenceId] = React.useState(sequences[0]?.id ?? "");
+  const [followUps, setFollowUps] = React.useState<FollowUpDraft[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [schedule, setSchedule] = React.useState<"now" | "today" | "thursday">("thursday");
@@ -544,7 +706,7 @@ function NewEmailWizard({
   const mergeSnippets: MergeSnippet[] = snippets.map((s) => ({ label: s.label, body: s.body }));
   const seq = sequences.find((s) => s.id === sequenceId) ?? null;
   const messageTemplate =
-    mode === "single" ? { subject, body } : { subject: seq?.steps[0]?.subject ?? "", body: seq?.steps[0]?.body ?? "" };
+    mode === "sequence" ? { subject: seq?.steps[0]?.subject ?? "", body: seq?.steps[0]?.body ?? "" } : { subject, body };
 
   function pickTemplate(id: string) {
     setTemplateId(id);
@@ -574,6 +736,26 @@ function NewEmailWizard({
           created += data.created;
           skipped += data.skipped?.length ?? 0;
         }
+      } else if (mode === "followups") {
+        const followUpPayload = followUps.map((f) => ({
+          subject: f.subject,
+          body: f.body,
+          when:
+            f.whenKind === "afterDays"
+              ? { kind: "afterDays" as const, days: f.days }
+              : { kind: "date" as const, dateISO: new Date(`${f.date}T09:00`).toISOString() },
+        }));
+        // One plan per contact (each request stays small for serverless limits).
+        for (const contactId of ids) {
+          const { ok, data } = await postJson("/api/messages/plan", {
+            contactId,
+            first: { subject, body },
+            firstSchedule: { kind: schedule, todayTime },
+            followUps: followUpPayload,
+          });
+          if (ok) created += 1;
+          else skipped += 1;
+        }
       } else {
         if (!sequenceId) throw new Error("Pick a sequence.");
         for (let i = 0; i < ids.length; i += 100) {
@@ -592,8 +774,12 @@ function NewEmailWizard({
           : schedule === "thursday"
           ? "They'll send next Thursday morning (Singapore time)."
           : `They'll send today at ${todayTime} (Singapore time).`;
+      const followUpNote =
+        mode === "followups" && followUps.length
+          ? ` ${followUps.length} follow-up${followUps.length === 1 ? "" : "s"} per lead will send automatically and stop if they reply.`
+          : "";
       onDone(
-        `Added ${created} email${created === 1 ? "" : "s"} to Ready to send. ${when}` +
+        `Added ${created} email${created === 1 ? "" : "s"} to Ready to send. ${when}${followUpNote}` +
           (skipped ? ` Skipped ${skipped} (suppressed, no email, demo address or already queued).` : "")
       );
     } catch (e) {
@@ -633,7 +819,7 @@ function NewEmailWizard({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Email type">
+            <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Email type">
               <ModeCard
                 active={mode === "single"}
                 onClick={() => setMode("single")}
@@ -642,16 +828,23 @@ function NewEmailWizard({
                 text="A single personalized email to each lead."
               />
               <ModeCard
+                active={mode === "followups"}
+                onClick={() => setMode("followups")}
+                icon={<CalendarClock className="h-5 w-5" aria-hidden />}
+                title="Email + follow-ups"
+                text="Write the first email and your own follow-ups. They send automatically and stop the moment they reply."
+              />
+              <ModeCard
                 active={mode === "sequence"}
                 onClick={() => setMode("sequence")}
                 icon={<ListOrdered className="h-5 w-5" aria-hidden />}
                 title="Sequence"
-                text="First email now, follow-ups drafted automatically. Stops when they reply."
+                text="First email now, follow-ups drafted from templates. Stops when they reply."
                 disabled={sequences.length === 0}
               />
             </div>
 
-            {mode === "single" ? (
+            {mode === "single" || mode === "followups" ? (
               <div className="space-y-3">
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-gray-700">Start from a template</span>
@@ -687,6 +880,14 @@ function NewEmailWizard({
                     </Chip>
                   ))}
                 </div>
+
+                {mode === "followups" ? (
+                  <FollowUpsEditor
+                    followUps={followUps}
+                    setFollowUps={setFollowUps}
+                    templates={templates}
+                  />
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -727,7 +928,13 @@ function NewEmailWizard({
               </Button>
               <Button
                 onClick={() => setStep(2)}
-                disabled={mode === "single" ? !subject.trim() || !body.trim() : !seq}
+                disabled={
+                  mode === "sequence"
+                    ? !seq
+                    : !subject.trim() ||
+                      !body.trim() ||
+                      (mode === "followups" && !followUpsValid(followUps))
+                }
               >
                 Preview <ArrowRight className="h-4 w-4" aria-hidden />
               </Button>
@@ -977,7 +1184,7 @@ function PreviewStep({
   contacts: ContactDTO[];
   template: { subject: string; body: string };
   snippets: MergeSnippet[];
-  mode: "single" | "sequence";
+  mode: "single" | "followups" | "sequence";
   busy: boolean;
   schedule: "now" | "today" | "thursday";
   setSchedule: (s: "now" | "today" | "thursday") => void;
@@ -1015,6 +1222,7 @@ function PreviewStep({
         <CardTitle>Check each email</CardTitle>
         <CardDescription>
           {mode === "sequence" ? "This is the first email of the sequence. " : ""}
+          {mode === "followups" ? "This is the first email; your follow-ups send automatically after it. " : ""}
           Every email gets a short opt-out line at the bottom automatically.
         </CardDescription>
       </CardHeader>
@@ -1070,7 +1278,7 @@ function PreviewStep({
         ) : (
           <fieldset className="rounded-xl border border-gray-200 p-4">
             <legend className="flex items-center gap-2 px-1 text-sm font-semibold text-brand-950">
-              <CalendarClock className="h-4 w-4" aria-hidden /> When should these send?
+              <CalendarClock className="h-4 w-4" aria-hidden /> When should the first email send?
             </legend>
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
               <ScheduleOption active={schedule === "thursday"} onClick={() => setSchedule("thursday")} title="Next Thursday" text="9am Singapore time — best for cold outreach" />

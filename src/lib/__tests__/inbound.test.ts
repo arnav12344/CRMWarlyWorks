@@ -113,6 +113,28 @@ describe("processInbound", () => {
     expect(s.replies).toBe(1);
   });
 
+  it("reply cancels the user's standalone follow-ups (waiting + queued) so none send", async () => {
+    const db = seed();
+    // Two write-your-own follow-ups linked to the first email m1.
+    db.messages.push(
+      { id: "fu1", contactId: "c1", direction: "outbound", status: "waiting", parentMessageId: "m1", followUpAfterDays: 2, subject: "Nudge 1", createdAt: new Date() },
+      { id: "fu2", contactId: "c1", direction: "outbound", status: "queued", parentMessageId: "m1", scheduledFor: new Date("2026-02-01T00:00:00Z"), subject: "Nudge 2", createdAt: new Date() }
+    );
+    await processInbound(asDb(db), [mail({ inReplyTo: "<abc-123@warlyworks.com>" })], { ownAddresses: OWN });
+
+    const fu1 = db.messages.find((m) => m.id === "fu1");
+    const fu2 = db.messages.find((m) => m.id === "fu2");
+    expect(fu1?.status).toBe("draft");
+    expect(fu2?.status).toBe("draft");
+    expect(fu2?.scheduledFor).toBeNull();
+
+    // releaseScheduled would find nothing to send now.
+    const stillQueued = db.messages.filter(
+      (m) => m.parentMessageId === "m1" && ["waiting", "queued", "approved"].includes(m.status as string)
+    );
+    expect(stillQueued).toHaveLength(0);
+  });
+
   it("is idempotent: the same Message-ID twice changes nothing", async () => {
     const db = seed();
     await processInbound(asDb(db), [mail()], { ownAddresses: OWN });

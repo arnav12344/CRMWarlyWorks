@@ -18,7 +18,7 @@
  */
 
 import type { PrismaClient } from "@prisma/client";
-import { scheduleFollowUps, APP_TIMEZONE } from "./reminders";
+import { scheduleFollowUps, addBusinessDays, APP_TIMEZONE } from "./reminders";
 import { normalizeEmail } from "./email";
 import { dayRange } from "./time";
 import { SEED_STAGE_NAME_BY_ROLE, type StageRole } from "./stageRoles";
@@ -248,6 +248,23 @@ export async function sendMessage(db: Db, messageId: string, opts: SendOptions):
     },
   });
   await moveToStage(db, contact.id, "contacted", { onlyForward: true });
+
+  // Release any "+N business days after this email" follow-ups the user wrote
+  // upfront: now that this email actually went out, give each a concrete send
+  // time and move it from "waiting" into the send queue. Absolute-date
+  // follow-ups are already "queued" and untouched here.
+  const waitingFollowUps = await db.emailMessage.findMany({
+    where: { parentMessageId: messageId, status: "waiting", followUpAfterDays: { not: null } },
+  });
+  for (const f of waitingFollowUps) {
+    await db.emailMessage.update({
+      where: { id: f.id },
+      data: {
+        status: "queued",
+        scheduledFor: addBusinessDays(now, (f.followUpAfterDays as number) ?? 0, timeZone),
+      },
+    });
+  }
 
   // One-off emails get 2- and 3-business-day follow-up reminders. Sequence
   // emails don't — the sequence itself drafts the follow-up.

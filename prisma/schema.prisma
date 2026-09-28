@@ -185,10 +185,15 @@ model EmailMessage {
   sequenceEnrollment   SequenceEnrollment? @relation(fields: [sequenceEnrollmentId], references: [id])
   templateId           String?
   template             Template?           @relation(fields: [templateId], references: [id])
+  /// For a user-written follow-up: the first email it follows up on.
+  parentMessageId      String?
+  parentMessage        EmailMessage?       @relation("FollowUpChain", fields: [parentMessageId], references: [id])
+  followUps            EmailMessage[]      @relation("FollowUpChain")
   direction            String              @default("outbound") // outbound | inbound
   subject              String?
   body                 String?
   // draft | queued | approved | sending | sent | failed | bounced | replied
+  // waiting = a follow-up whose parent email hasn't sent yet (must not be released)
   // (inbound rows use: replied | autoreply | optout | bounce_notice)
   status               String              @default("draft")
   fromAddress          String?
@@ -202,16 +207,22 @@ model EmailMessage {
   /// When this message should be sent. Null = send as soon as you click Send /
   /// Send all. A future time = the scheduled job releases it then.
   scheduledFor         DateTime?
+  /// For a "+N business days after the previous email" follow-up: the offset,
+  /// resolved into a concrete scheduledFor once the parent actually sends.
+  followUpAfterDays    Int?
   sentAt               DateTime?
   openedAt             DateTime?
   repliedAt            DateTime?
   bouncedAt            DateTime?
+  /// When an inbound reply was marked read (for the unread-reply badge).
+  seenAt               DateTime?
   createdAt            DateTime            @default(now())
 
   @@index([contactId])
   @@index([status])
   @@index([sentAt])
   @@index([scheduledFor])
+  @@index([parentMessageId])
 }
 
 model Activity {

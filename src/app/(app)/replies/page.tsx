@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { prisma } from "@/lib/db";
 import { lastSyncedAt } from "@/lib/mail/inbox";
 import { readMailConfig } from "@/lib/mail/config";
+import { markRepliesSeen } from "@/lib/replies";
 import { RepliesWorkspace } from "./RepliesWorkspace";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,9 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
 
   const name = (c: { fullName: string | null; firstName?: string | null; email: string | null }) =>
     c.fullName || c.firstName || c.email || "Unknown";
+
+  // Opening this page clears the unread-reply badge in the sidebar.
+  await markRepliesSeen(prisma).catch(() => 0);
 
   return (
     <>

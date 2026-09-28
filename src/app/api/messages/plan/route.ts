@@ -1,0 +1,139 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { prisma } from "@/lib/db";
+import { resolveContact } from "@/lib/contactResolve";
+import { isEmailSuppressed } from "@/lib/outreach";
+import { scheduleFollowUpEmails, validateFollowUps, type FollowUpInput } from "@/lib/followupPlan";
+import { resolveSchedule } from "@/lib/schedule";
+import { readMailConfig } from "@/lib/mail/config";
+import { normalizeEmail } from "@/lib/email";
+
+export const runtime = "nodejs";
+
+const whenSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("afterDays"), days: z.number().int().min(1).max(60) }),
+  z.object({ kind: z.literal("date"), dateISO: z.string().datetime({ offset: true }) }),
+]);
+
+const schema = z
+  .object({
+    contactId: z.string().min(1).optional(),
+    email: z.string().max(320).optional(),
+    fullName: z.string().max(200).optional(),
+    orgName: z.string().max(200).optional(),
+    first: z.object({
+      subject: z.string().min(1).max(300),
+      body: z.string().max(20000),
+    }),
+    firstSchedule: z.object({
+      kind: z.enum(["now", "today", "thursday"]),
+      todayTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+    }),
+    followUps: z
+      .array(
+        z.object({
+          subject: z.string().max(300),
+          body: z.string().max(20000),
+          when: whenSchema,
+        })
+      )
+      .max(10)
+      .default([]),
+  })
+  .refine((v) => v.contactId || v.email, { message: "Provide a contact or an email address." });
+
+/**
+ * POST /api/messages/plan
+ * Compose a first email plus write-your-own follow-ups in one go. The first
+ * email lands in Ready to send (optionally scheduled); each follow-up is a
+ * linked message that auto-sends on schedule unless the contact replies.
+ * Nothing is sent here — the cron releases due messages.
+ */
+export async function POST(request: Request) {
+  const parsed = schema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request." }, { status: 400 });
+  }
+  const d = parsed.data;
+  const now = new Date();
+
+  // Validate the follow-up plan up front so nothing is written on a bad plan.
+  const followUps: FollowUpInput[] = d.followUps.map((f) => ({ subject: f.subject, body: f.body, when: f.when }));
+  const planCheck = validateFollowUps(followUps, now);
+  if (!planCheck.ok) {
+    return NextResponse.json({ error: planCheck.reason }, { status: 400 });
+  }
+
+  const resolved = await resolveContact(prisma, {
+    contactId: d.contactId,
+    email: d.email,
+    fullName: d.fullName,
+    orgName: d.orgName,
+  });
+  if (!resolved.ok) {
+    return NextResponse.json({ error: resolved.reason, code: resolved.code }, { status: resolved.code === "not_found" ? 404 : 400 });
+  }
+  const contact = resolved.contact;
+
+  const to = normalizeEmail(contact.email);
+  if (!to) {
+    return NextResponse.json({ error: "This contact has no email address. Add one first.", code: "invalid" }, { status: 400 });
+  }
+  if (contact.suppressed || (await isEmailSuppressed(prisma, to))) {
+    return NextResponse.json(
+      { error: "This address is on the do-not-contact list.", code: "suppressed" },
+      { status: 409 }
+    );
+  }
+
+  const scheduledFor = resolveSchedule(d.firstSchedule.kind, now, d.firstSchedule.todayTime);
+
+  // Create the first email in Ready to send (never sent here).
+  const first = await prisma.emailMessage.create({
+    data: {
+      contactId: contact.id,
+      direction: "outbound",
+      status: "queued",
+      subject: d.first.subject.trim(),
+      body: d.first.body,
+      toAddress: to,
+      fromAddress: readMailConfig()?.fromAddress ?? null,
+      scheduledFor,
+    },
+  });
+
+  // Schedule the write-your-own follow-ups against that first email.
+  const fuResult = await scheduleFollowUpEmails(prisma, {
+    firstMessageId: first.id,
+    contactId: contact.id,
+    toAddress: to,
+    followUps,
+    now,
+  });
+  if (!fuResult.ok) {
+    // Roll back the first email so we don't leave a half-made plan.
+    await prisma.emailMessage.delete({ where: { id: first.id } }).catch(() => undefined);
+    return NextResponse.json({ error: fuResult.reason, code: "invalid" }, { status: 400 });
+  }
+
+  await prisma.activity.create({
+    data: {
+      contactId: contact.id,
+      type: "email_queued",
+      summary:
+        followUps.length > 0
+          ? `Queued an email + ${followUps.length} follow-up${followUps.length === 1 ? "" : "s"}: ${d.first.subject.trim()}`
+          : `Added to Ready to send: ${d.first.subject.trim()}`,
+      meta: JSON.stringify({ firstMessageId: first.id, followUpCount: followUps.length }),
+    },
+  });
+
+  return NextResponse.json({
+    ok: true,
+    contactId: contact.id,
+    firstMessageId: first.id,
+    followUpCount: fuResult.createdIds.length,
+    createdContact: resolved.createdContact,
+    scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
+  });
+}

@@ -7,7 +7,7 @@ import { Home, ChevronDown, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STEPS, MORE_LINKS, stepForPath } from "./steps";
 
-export function Sidebar() {
+export function Sidebar({ unreadReplies = 0 }: { unreadReplies?: number }) {
   const pathname = usePathname();
   const activeStep = stepForPath(pathname);
   const moreActive = MORE_LINKS.some((l) => pathname.startsWith(l.href));
@@ -58,7 +58,15 @@ export function Sidebar() {
                   <span className={cn("flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold", s.solid)}>
                     {s.n}
                   </span>
-                  {s.label}
+                  <span className="flex-1">{s.label}</span>
+                  {s.href === "/replies" && unreadReplies > 0 ? (
+                    <span
+                      className="ml-auto flex h-5 min-w-[20px] items-center justify-center rounded-full bg-accent-400 px-1.5 text-xs font-bold text-brand-950"
+                      aria-label={`${unreadReplies} unread ${unreadReplies === 1 ? "reply" : "replies"}`}
+                    >
+                      {unreadReplies > 99 ? "99+" : unreadReplies}
+                    </span>
+                  ) : null}
                 </Link>
               </li>
             );

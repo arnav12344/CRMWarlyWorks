@@ -273,6 +273,54 @@ describe("sendMessage — real send pipeline", () => {
     expect(db.messages[0].status).toBe("sent");
   });
 
+  it("releases a waiting '+2 business days' follow-up once the first email sends", async () => {
+    const db = seedBasic();
+    queue(db); // the first email, id m1
+    // A user-written follow-up waiting on the first email.
+    db.messages.push({
+      id: "f1",
+      contactId: "c1",
+      parentMessageId: "m1",
+      direction: "outbound",
+      status: "waiting",
+      followUpAfterDays: 2,
+      scheduledFor: null,
+      subject: "Nudge",
+      body: "Just checking in",
+      createdAt: NOW,
+    });
+
+    const res = await sendMessage(asDb(db), "m1", { mailer: new FakeMailer(), now: NOW });
+    expect(res.ok).toBe(true);
+
+    const follow = db.messages.find((m) => m.id === "f1");
+    expect(follow?.status).toBe("queued");
+    // NOW is Thu 12:00 SGT; +2 business days (Fri, Mon) = Monday, same wall time.
+    expect((follow?.scheduledFor as Date).toISOString()).toBe("2026-01-05T04:00:00.000Z");
+  });
+
+  it("leaves an absolute-date follow-up untouched when the first email sends", async () => {
+    const db = seedBasic();
+    queue(db);
+    const dateISO = "2026-01-09T04:00:00.000Z";
+    db.messages.push({
+      id: "f1",
+      contactId: "c1",
+      parentMessageId: "m1",
+      direction: "outbound",
+      status: "queued",
+      followUpAfterDays: null,
+      scheduledFor: new Date(dateISO),
+      subject: "Nudge",
+      body: "Body",
+      createdAt: NOW,
+    });
+    await sendMessage(asDb(db), "m1", { mailer: new FakeMailer(), now: NOW });
+    const follow = db.messages.find((m) => m.id === "f1");
+    expect(follow?.status).toBe("queued");
+    expect((follow?.scheduledFor as Date).toISOString()).toBe(dateISO);
+  });
+
   it("returns not_configured when no mailer is set up", async () => {
     const db = seedBasic();
     queue(db);
