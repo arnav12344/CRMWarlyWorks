@@ -16,7 +16,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   ]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    // 100dvh, not 100vh: on phones 100vh is taller than the visible area, which
+    // hides the bottom of every page under the browser toolbar.
+    <div className="flex h-screen overflow-hidden supports-[height:100dvh]:h-dvh">
       <Sidebar unreadReplies={unreadReplies} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar sentToday={sentToday} dailyLimit={dailyLimit} mailConfigured={readMailConfig() !== null} />

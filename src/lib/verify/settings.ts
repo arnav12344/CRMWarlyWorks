@@ -17,6 +17,8 @@ export const SETTING_KEYS = {
   dailySendLimit: "daily_send_limit",
   imapState: "imap_state",
   imapLastSync: "imap_last_sync",
+  /** JSON { html, text, source, updatedAt } — added to every outgoing email. */
+  emailSignature: "email_signature",
 } as const;
 
 export type ProviderKeyName = "millionverifier" | "zerobounce";

@@ -7,6 +7,7 @@ import { getMailer } from "@/lib/mail/mailer";
 import { getDailySendLimit, getPlainSetting, SETTING_KEYS } from "@/lib/verify/settings";
 import { inSendWindow } from "@/lib/schedule";
 import { APP_TIMEZONE } from "@/lib/reminders";
+import { getSignature } from "@/lib/mail/signatureStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,15 +22,17 @@ export const POST = createTickHandler({
   advance: () => advanceEnrollments(prisma),
   release: async (): Promise<Record<string, unknown>> => {
     const now = new Date();
-    const [dailyLimit, timeZone] = await Promise.all([
+    const [dailyLimit, timeZone, signature] = await Promise.all([
       getDailySendLimit(),
       getPlainSetting(SETTING_KEYS.timezone, APP_TIMEZONE),
+      getSignature(),
     ]);
     const r = await releaseScheduled(prisma, {
       mailer: getMailer(),
       now,
       timeZone,
       dailyLimit,
+      signature,
       // During the weekly window, also flush emails parked for "next window".
       includeWindow: inSendWindow(now),
     });

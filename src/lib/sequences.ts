@@ -10,6 +10,10 @@
  * PREVIOUS step was actually sent, and never while the previous step is still
  * sitting unsent — so a follow-up can't jump ahead of the first email.
  *
+ * Steps after the first are sent as replies in the first email's thread, so
+ * they're drafted with its subject ("Re: <first subject>"); the step
+ * template's own subject is only used for the first email.
+ *
  * Enrollments STOP automatically when the contact replied, bounced, or is
  * suppressed.
  */
@@ -18,6 +22,7 @@ import type { PrismaClient } from "@prisma/client";
 import { addBusinessDays, APP_TIMEZONE } from "./reminders";
 import { buildMergeContext, renderEmail, type MergeSnippet } from "./merge";
 import { normalizeEmail } from "./email";
+import { replySubject } from "./mail/compose";
 
 type Db = PrismaClient;
 
@@ -160,6 +165,15 @@ export async function advanceEnrollments(
       snippets
     );
 
+    // Later steps reply in the thread the first sent step started.
+    const threadRoot =
+      enrollment.currentStep > 0
+        ? contact.messages
+            .filter((m) => m.sequenceEnrollmentId === enrollment.id && m.direction !== "inbound" && m.sentAt)
+            .sort((a, b) => new Date(a.sentAt as Date).getTime() - new Date(b.sentAt as Date).getTime())[0]
+        : undefined;
+    const subject = threadRoot?.subject ? replySubject(threadRoot.subject) : rendered.subject;
+
     const message = await db.emailMessage.create({
       data: {
         contactId: contact.id,
@@ -167,7 +181,7 @@ export async function advanceEnrollments(
         templateId: template?.id ?? null,
         direction: "outbound",
         toAddress: normalized,
-        subject: rendered.subject,
+        subject,
         body: rendered.body,
         status: "queued",
       },

@@ -5,6 +5,7 @@ import { approveMessage, rejectMessage, sendMessage } from "@/lib/outreach";
 import { getMailer } from "@/lib/mail/mailer";
 import { getDailySendLimit, getPlainSetting, SETTING_KEYS } from "@/lib/verify/settings";
 import { APP_TIMEZONE } from "@/lib/reminders";
+import { getSignature } from "@/lib/mail/signatureStore";
 
 export const runtime = "nodejs";
 
@@ -36,11 +37,12 @@ export async function POST(request: Request) {
     return NextResponse.json(res, { status: res.ok ? 200 : 422 });
   }
 
-  const [dailyLimit, timeZone] = await Promise.all([
+  const [dailyLimit, timeZone, signature] = await Promise.all([
     getDailySendLimit(),
     getPlainSetting(SETTING_KEYS.timezone, APP_TIMEZONE),
+    getSignature(),
   ]);
-  const res = await sendMessage(prisma, messageId, { mailer: getMailer(), dailyLimit, timeZone });
+  const res = await sendMessage(prisma, messageId, { mailer: getMailer(), dailyLimit, timeZone, signature });
   const status = res.ok ? 200 : res.code === "daily_limit" ? 429 : res.code === "not_configured" ? 503 : 422;
   return NextResponse.json(res, { status });
 }

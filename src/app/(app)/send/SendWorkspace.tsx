@@ -17,6 +17,7 @@ import {
   Mail,
   PenSquare,
   Plus,
+  Reply,
   RotateCcw,
   Send,
   SkipForward,
@@ -36,6 +37,7 @@ import { Stepper } from "@/components/ui/Stepper";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { renderEmail, buildMergeContext, type MergeSnippet } from "@/lib/merge";
 import { findPlaceholders } from "@/lib/placeholders";
+import { replySubject } from "@/lib/mail/compose";
 
 /* ---------------------------------- types --------------------------------- */
 
@@ -51,6 +53,8 @@ interface QueueItem {
   orgName: string | null;
   sequenceName: string | null;
   scheduledFor: string | null;
+  /** Goes out as a reply in an existing thread (subject fixed to "Re: …"). */
+  isReply: boolean;
 }
 
 /** "Thu, 8 Jan, 09:00" in Singapore time. */
@@ -80,6 +84,9 @@ interface ContactDTO {
   verification: string | null;
   isRoleInbox: boolean;
   sentCount: number;
+  /** Subject + time of the last email you sent them (for "reply in thread"). */
+  lastSentSubject: string | null;
+  lastSentAt: string | null;
 }
 interface TemplateDTO {
   id: string;
@@ -104,9 +111,8 @@ interface Option {
 
 type Tab = "ready" | "new";
 
-/** A write-your-own follow-up drafted in the composer (before it's saved). */
+/** A write-your-own follow-up drafted in the composer (before it's saved). It's sent as a reply, so no subject. */
 interface FollowUpDraft {
-  subject: string;
   body: string;
   /** "afterDays" = N business days after the previous email; "date" = a fixed day. */
   whenKind: "afterDays" | "date";
@@ -120,6 +126,7 @@ const SEND_GAP_MS = 3000; // pause between sends in "Send all" (gentle on Gmail)
 function contactName(c: ContactDTO): string {
   return c.fullName || [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email || "Unknown";
 }
+
 
 async function postJson(url: string, body: unknown) {
   const res = await fetch(url, {
@@ -139,6 +146,8 @@ export function SendWorkspace(props: {
   mailConfigured: boolean;
   sentToday: number;
   dailyLimit: number;
+  /** Plain-text version of the signature added to every email (null = none). */
+  signatureText: string | null;
   queue: QueueItem[];
   contacts: ContactDTO[];
   templates: TemplateDTO[];
@@ -428,6 +437,11 @@ function ReadyToSend({
                           <ListOrdered className="h-3 w-3" aria-hidden /> {m.sequenceName}
                         </Badge>
                       ) : null}
+                      {m.isReply ? (
+                        <Badge tone="info" title="Sent as a reply in the same email thread">
+                          <Reply className="h-3 w-3" aria-hidden /> Reply in thread
+                        </Badge>
+                      ) : null}
                       {missing.length ? <Badge tone="warning">Needs fixing</Badge> : null}
                       {m.scheduledFor ? (
                         <Badge tone="info">
@@ -497,7 +511,12 @@ function EditForm({
     <div className="space-y-3">
       <label className="block">
         <span className="mb-1 block text-sm font-medium text-gray-700">Subject</span>
-        <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
+        <Input value={subject} onChange={(e) => setSubject(e.target.value)} readOnly={item.isReply} className={item.isReply ? "bg-gray-50 text-gray-600" : undefined} />
+        {item.isReply ? (
+          <span className="mt-1 block text-xs text-gray-600">
+            This goes out as a reply in the same thread, so it keeps the thread&apos;s subject.
+          </span>
+        ) : null}
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium text-gray-700">Body</span>
@@ -519,11 +538,11 @@ function EditForm({
 
 const WIZARD_STEPS = ["Pick leads", "Choose message", "Preview & add"] as const;
 
-/** Every follow-up needs a subject and a valid schedule value. */
+/** Every follow-up needs a message and a valid schedule value. */
 function followUpsValid(followUps: FollowUpDraft[]): boolean {
   return followUps.every(
     (f) =>
-      f.subject.trim().length > 0 &&
+      f.body.trim().length > 0 &&
       (f.whenKind === "afterDays" ? f.days >= 1 && f.days <= 60 : f.date.trim().length > 0)
   );
 }
@@ -541,16 +560,18 @@ function FollowUpsEditor({
   followUps,
   setFollowUps,
   templates,
+  firstSubject,
 }: {
   followUps: FollowUpDraft[];
   setFollowUps: React.Dispatch<React.SetStateAction<FollowUpDraft[]>>;
   templates: TemplateDTO[];
+  /** Subject of the first email — follow-ups reply in its thread. */
+  firstSubject: string;
 }) {
   function add() {
     setFollowUps((list) => [
       ...list,
       {
-        subject: "",
         body: "",
         whenKind: "afterDays",
         days: list.length === 0 ? 2 : 3,
@@ -571,8 +592,10 @@ function FollowUpsEditor({
         <CalendarClock className="h-4 w-4" aria-hidden /> Follow-ups
       </legend>
       <p className="text-xs text-gray-600">
-        These send automatically after the first email, and stop the moment the lead replies. Timing is in Singapore
-        business days.
+        These send automatically after the first email, and stop the moment the lead replies. Each one goes out as a
+        reply in the same thread (subject{" "}
+        <span className="font-medium text-gray-800">{replySubject(firstSubject || "your first email")}</span>), with
+        the earlier emails quoted underneath. Timing is in Singapore business days.
       </p>
 
       {followUps.map((f, i) => (
@@ -591,7 +614,7 @@ function FollowUpsEditor({
                 value=""
                 onChange={(e) => {
                   const t = templates.find((x) => x.id === e.target.value);
-                  if (t) update(i, { subject: t.subject, body: t.body });
+                  if (t) update(i, { body: t.body });
                 }}
               >
                 <option value="">Choose a template…</option>
@@ -605,16 +628,12 @@ function FollowUpsEditor({
           ) : null}
 
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-gray-600">Subject</span>
-            <Input value={f.subject} onChange={(e) => update(i, { subject: e.target.value })} placeholder="e.g. Following up on my note" />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-gray-600">Body</span>
+            <span className="mb-1 block text-xs font-medium text-gray-600">Message</span>
             <Textarea
               className="min-h-[120px]"
               value={f.body}
               onChange={(e) => update(i, { body: e.target.value })}
-              placeholder="Write the follow-up, or leave blank to fill from a template."
+              placeholder="Write the follow-up, or fill it from a template above."
             />
           </label>
 
@@ -675,6 +694,7 @@ function NewEmailWizard({
   contactTypes,
   stages,
   preselectContactId,
+  signatureText,
   onDone,
 }: {
   contacts: ContactDTO[];
@@ -684,6 +704,7 @@ function NewEmailWizard({
   contactTypes: Option[];
   stages: Option[];
   preselectContactId: string | null;
+  signatureText: string | null;
   onDone: (message: string) => void;
 }) {
   const router = useRouter();
@@ -701,8 +722,12 @@ function NewEmailWizard({
   const [error, setError] = React.useState<string | null>(null);
   const [schedule, setSchedule] = React.useState<"now" | "today" | "thursday">("thursday");
   const [todayTime, setTodayTime] = React.useState("09:00");
+  // Leads you've already emailed: send this as a reply in that thread.
+  const [replyToLast, setReplyToLast] = React.useState(true);
 
   const chosen = contacts.filter((c) => selected.has(c.id));
+  const emailedBefore = chosen.filter((c) => c.sentCount > 0 && c.lastSentSubject).length;
+  const threading = mode !== "sequence" && replyToLast && emailedBefore > 0;
   const mergeSnippets: MergeSnippet[] = snippets.map((s) => ({ label: s.label, body: s.body }));
   const seq = sequences.find((s) => s.id === sequenceId) ?? null;
   const messageTemplate =
@@ -731,6 +756,7 @@ function NewEmailWizard({
             body,
             schedule,
             todayTime,
+            replyToLast: threading,
           });
           if (!ok) throw new Error(data.error ?? "Could not create emails.");
           created += data.created;
@@ -738,7 +764,6 @@ function NewEmailWizard({
         }
       } else if (mode === "followups") {
         const followUpPayload = followUps.map((f) => ({
-          subject: f.subject,
           body: f.body,
           when:
             f.whenKind === "afterDays"
@@ -746,16 +771,22 @@ function NewEmailWizard({
               : { kind: "date" as const, dateISO: new Date(`${f.date}T09:00`).toISOString() },
         }));
         // One plan per contact (each request stays small for serverless limits).
+        let lastError: string | null = null;
         for (const contactId of ids) {
           const { ok, data } = await postJson("/api/messages/plan", {
             contactId,
             first: { subject, body },
             firstSchedule: { kind: schedule, todayTime },
             followUps: followUpPayload,
+            replyToLast: threading,
           });
           if (ok) created += 1;
-          else skipped += 1;
+          else {
+            skipped += 1;
+            lastError = data.error ?? lastError;
+          }
         }
+        if (created === 0 && lastError) throw new Error(lastError);
       } else {
         if (!sequenceId) throw new Error("Pick a sequence.");
         for (let i = 0; i < ids.length; i += 100) {
@@ -806,6 +837,8 @@ function NewEmailWizard({
           selected={selected}
           setSelected={setSelected}
           onNext={() => setStep(1)}
+          // Coming from "Write follow-up": that lead was emailed already, so show emailed leads.
+          defaultNotEmailed={!preselectContactId}
         />
       ) : null}
 
@@ -881,11 +914,31 @@ function NewEmailWizard({
                   ))}
                 </div>
 
+                {emailedBefore > 0 ? (
+                  <label className="flex items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 accent-brand-900"
+                      checked={replyToLast}
+                      onChange={(e) => setReplyToLast(e.target.checked)}
+                    />
+                    <span>
+                      <span className="block font-semibold">Send as a reply to my last email</span>
+                      {emailedBefore === chosen.length
+                        ? `You've emailed ${chosen.length === 1 ? "this lead" : "all of these leads"} before. `
+                        : `You've emailed ${emailedBefore} of these ${chosen.length} leads before. `}
+                      It goes into that thread (&quot;Re: &lt;their last subject&gt;&quot;, with your last email quoted
+                      underneath). Leads you haven&apos;t emailed get a new email with the subject above.
+                    </span>
+                  </label>
+                ) : null}
+
                 {mode === "followups" ? (
                   <FollowUpsEditor
                     followUps={followUps}
                     setFollowUps={setFollowUps}
                     templates={templates}
+                    firstSubject={subject}
                   />
                 ) : null}
               </div>
@@ -917,7 +970,8 @@ function NewEmailWizard({
                   </ol>
                 ) : null}
                 <p className="text-xs text-gray-600">
-                  Edit sequence steps under More → Sequences &amp; templates.
+                  Steps after the first go out as replies in the first email&apos;s thread (&quot;Re: …&quot;). Edit
+                  sequence steps under More → Sequences &amp; templates.
                 </p>
               </div>
             )}
@@ -956,6 +1010,8 @@ function NewEmailWizard({
           setTodayTime={setTodayTime}
           onBack={() => setStep(1)}
           onConfirm={addToReady}
+          threading={threading}
+          signatureText={signatureText}
         />
       ) : null}
     </div>
@@ -1037,6 +1093,7 @@ function PickLeads({
   selected,
   setSelected,
   onNext,
+  defaultNotEmailed = true,
 }: {
   contacts: ContactDTO[];
   contactTypes: Option[];
@@ -1044,12 +1101,13 @@ function PickLeads({
   selected: Set<string>;
   setSelected: (s: Set<string>) => void;
   onNext: () => void;
+  defaultNotEmailed?: boolean;
 }) {
   const [q, setQ] = React.useState("");
   const [typeId, setTypeId] = React.useState("");
   const [stageId, setStageId] = React.useState("");
   const [checkedOnly, setCheckedOnly] = React.useState(true);
-  const [notEmailed, setNotEmailed] = React.useState(true);
+  const [notEmailed, setNotEmailed] = React.useState(defaultNotEmailed);
 
   const filtered = contacts.filter((c) => {
     if (checkedOnly && !(c.verification === "valid" || c.verification === "risky")) return false;
@@ -1180,6 +1238,8 @@ function PreviewStep({
   setTodayTime,
   onBack,
   onConfirm,
+  threading,
+  signatureText,
 }: {
   contacts: ContactDTO[];
   template: { subject: string; body: string };
@@ -1192,6 +1252,9 @@ function PreviewStep({
   setTodayTime: (t: string) => void;
   onBack: () => void;
   onConfirm: () => void;
+  /** Leads you've emailed before get this as a reply in that thread. */
+  threading: boolean;
+  signatureText: string | null;
 }) {
   const [i, setI] = React.useState(0);
   const rendered = React.useMemo(
@@ -1215,15 +1278,17 @@ function PreviewStep({
   const r = rendered[Math.min(i, rendered.length - 1)];
 
   if (!c || !r) return null;
+  const asReply = threading && c.sentCount > 0 && !!c.lastSentSubject;
+  const shownSubject = asReply ? replySubject(c.lastSentSubject) : r.subject;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Check each email</CardTitle>
         <CardDescription>
-          {mode === "sequence" ? "This is the first email of the sequence. " : ""}
-          {mode === "followups" ? "This is the first email; your follow-ups send automatically after it. " : ""}
-          Every email gets a short opt-out line at the bottom automatically.
+          {mode === "sequence" ? "This is the first email of the sequence; later steps reply in its thread. " : ""}
+          {mode === "followups" ? "This is the first email; your follow-ups reply in its thread automatically. " : ""}
+          {signatureText ? "Your signature is added to every email." : "No signature yet — add one in Settings."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1258,12 +1323,28 @@ function PreviewStep({
             <p className="text-gray-600">
               To: <span className="font-medium text-gray-900">{contactName(c)}</span> &lt;{c.email}&gt;
             </p>
-            <p className="font-semibold text-gray-900">{r.subject || "(no subject)"}</p>
+            <p className="font-semibold text-gray-900">{shownSubject || "(no subject)"}</p>
+            {asReply ? (
+              <p className="flex items-center gap-1 text-xs text-sky-800">
+                <Reply className="h-3 w-3" aria-hidden /> Reply in the thread of your email
+                {c.lastSentAt ? ` from ${fmtSchedule(c.lastSentAt)}` : ""} — it&apos;s quoted underneath.
+              </p>
+            ) : null}
           </div>
           <div className="whitespace-pre-wrap px-5 py-4 text-sm leading-relaxed text-gray-800">{r.body}</div>
-          <div className="border-t border-dashed border-gray-200 px-5 py-3 text-xs text-gray-500">
-            -- Not relevant? Just reply &quot;unsubscribe&quot; and I won&apos;t email again.
-          </div>
+          {signatureText ? (
+            <div className="whitespace-pre-wrap border-t border-dashed border-gray-200 px-5 py-3 text-sm text-gray-600">
+              {signatureText}
+            </div>
+          ) : (
+            <div className="border-t border-dashed border-gray-200 px-5 py-3 text-xs text-gray-500">
+              No signature —{" "}
+              <Link href="/settings" className="font-medium text-brand-800 underline">
+                add yours in Settings
+              </Link>
+              .
+            </div>
+          )}
         </div>
         {r.missing.length || r.missingSnippets.length ? (
           <p className="text-xs text-amber-900">

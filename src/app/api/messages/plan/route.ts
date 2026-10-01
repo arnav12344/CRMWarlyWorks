@@ -7,6 +7,7 @@ import { scheduleFollowUpEmails, validateFollowUps, type FollowUpInput } from "@
 import { resolveSchedule } from "@/lib/schedule";
 import { readMailConfig } from "@/lib/mail/config";
 import { normalizeEmail } from "@/lib/email";
+import { replySubject } from "@/lib/mail/compose";
 
 export const runtime = "nodejs";
 
@@ -32,13 +33,15 @@ const schema = z
     followUps: z
       .array(
         z.object({
-          subject: z.string().max(300),
+          subject: z.string().max(300).optional(),
           body: z.string().max(20000),
           when: whenSchema,
         })
       )
       .max(10)
       .default([]),
+    /** Send the first email as a reply in the thread of your last email to this contact. */
+    replyToLast: z.boolean().optional(),
   })
   .refine((v) => v.contactId || v.email, { message: "Provide a contact or an email address." });
 
@@ -88,23 +91,35 @@ export async function POST(request: Request) {
 
   const scheduledFor = resolveSchedule(d.firstSchedule.kind, now, d.firstSchedule.todayTime);
 
+  // Optionally continue the thread of the last email you sent this contact.
+  const lastSent = d.replyToLast
+    ? await prisma.emailMessage.findFirst({
+        where: { contactId: contact.id, direction: "outbound", sentAt: { not: null } },
+        orderBy: { sentAt: "desc" },
+        select: { id: true, subject: true },
+      })
+    : null;
+  const firstSubject = lastSent ? replySubject(lastSent.subject) : d.first.subject.trim();
+
   // Create the first email in Ready to send (never sent here).
   const first = await prisma.emailMessage.create({
     data: {
       contactId: contact.id,
       direction: "outbound",
       status: "queued",
-      subject: d.first.subject.trim(),
+      subject: firstSubject,
       body: d.first.body,
       toAddress: to,
       fromAddress: readMailConfig()?.fromAddress ?? null,
       scheduledFor,
+      parentMessageId: lastSent?.id ?? null,
     },
   });
 
   // Schedule the write-your-own follow-ups against that first email.
   const fuResult = await scheduleFollowUpEmails(prisma, {
     firstMessageId: first.id,
+    firstSubject,
     contactId: contact.id,
     toAddress: to,
     followUps,
@@ -122,8 +137,8 @@ export async function POST(request: Request) {
       type: "email_queued",
       summary:
         followUps.length > 0
-          ? `Queued an email + ${followUps.length} follow-up${followUps.length === 1 ? "" : "s"}: ${d.first.subject.trim()}`
-          : `Added to Ready to send: ${d.first.subject.trim()}`,
+          ? `Queued an email + ${followUps.length} follow-up${followUps.length === 1 ? "" : "s"}: ${firstSubject}`
+          : `Added to Ready to send: ${firstSubject}`,
       meta: JSON.stringify({ firstMessageId: first.id, followUpCount: followUps.length }),
     },
   });

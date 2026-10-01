@@ -17,6 +17,12 @@ export interface OutgoingMail {
   to: string;
   subject: string;
   text: string;
+  /** HTML part (sent alongside `text` as multipart/alternative). */
+  html?: string;
+  /** Message-ID (no angle brackets) of the email this one replies to. */
+  inReplyTo?: string;
+  /** Message-IDs of the whole thread so far, oldest first (no angle brackets). */
+  references?: string[];
   headers?: Record<string, string>;
 }
 
@@ -28,6 +34,8 @@ export interface SentMail {
 export interface Mailer {
   /** The From address mail goes out as. */
   readonly fromAddress: string;
+  /** The From display name (used in "On …, Name <address> wrote:" quotes). */
+  readonly fromName: string;
   send(mail: OutgoingMail): Promise<SentMail>;
 }
 
@@ -40,10 +48,12 @@ export function cleanMessageId(id: string | null | undefined): string | null {
 
 export class GmailSmtpMailer implements Mailer {
   readonly fromAddress: string;
+  readonly fromName: string;
   private readonly transport: Transporter;
 
   constructor(private readonly cfg: MailConfig) {
     this.fromAddress = cfg.fromAddress;
+    this.fromName = cfg.fromName;
     this.transport = nodemailer.createTransport({
       host: "smtp.gmail.com",
       port: 465,
@@ -60,13 +70,19 @@ export class GmailSmtpMailer implements Mailer {
     // We mint the Message-ID ourselves so replies can be threaded back to the
     // exact message we stored.
     const messageId = `${randomUUID()}@${fromDomain(this.cfg)}`;
+    const references = (mail.references ?? []).filter(Boolean).map((id) => `<${id}>`);
     await this.transport.sendMail({
       from: formatFrom(this.cfg),
       replyTo: this.cfg.fromAddress,
       to: mail.to,
       subject: mail.subject,
       text: mail.text,
+      ...(mail.html ? { html: mail.html } : {}),
       messageId: `<${messageId}>`,
+      // Threading: mail apps (Gmail included) put this email in the same
+      // conversation as the one it replies to.
+      ...(mail.inReplyTo ? { inReplyTo: `<${mail.inReplyTo}>` } : {}),
+      ...(references.length ? { references } : {}),
       headers: mail.headers,
     });
     return { messageId: messageId.toLowerCase() };
@@ -84,7 +100,10 @@ export class FakeMailer implements Mailer {
   readonly sent: Array<OutgoingMail & { messageId: string }> = [];
   failWith: Error | null = null;
 
-  constructor(readonly fromAddress = "a@warlyworks.com") {}
+  constructor(
+    readonly fromAddress = "a@warlyworks.com",
+    readonly fromName = "Arnav from WarlyWorks"
+  ) {}
 
   async send(mail: OutgoingMail): Promise<SentMail> {
     if (this.failWith) throw this.failWith;

@@ -34,7 +34,7 @@ const TIMEZONES = [
   "UTC",
 ];
 
-export function SettingsForm({ initial }: { initial: SettingsInitial }) {
+export function SettingsForm({ initial, afterMail }: { initial: SettingsInitial; afterMail?: React.ReactNode }) {
   const router = useRouter();
   const [mvKey, setMvKey] = React.useState("");
   const [zbKey, setZbKey] = React.useState("");
@@ -136,6 +136,8 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           </div>
         </CardContent>
       </Card>
+
+      {afterMail}
 
       <Card>
         <CardHeader>

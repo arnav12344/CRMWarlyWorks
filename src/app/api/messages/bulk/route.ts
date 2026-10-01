@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { buildBulkDrafts } from "@/lib/bulk";
 import { resolveSchedule } from "@/lib/schedule";
+import { replySubject } from "@/lib/mail/compose";
 
 export const runtime = "nodejs";
 
@@ -11,7 +12,10 @@ export const runtime = "nodejs";
  * Render one template (saved or written inline) for many leads and add the
  * personalized emails to Ready to send. Nothing is sent here.
  *
- * Body: { contactIds: string[], templateId?: string, subject?: string, body?: string }
+ * Body: { contactIds: string[], templateId?: string, subject?: string, body?: string,
+ *         replyToLast?: boolean }
+ * With replyToLast, a lead you've emailed before gets this as a reply in the
+ * thread of your last email to them ("Re: <that subject>"); others get a new email.
  */
 const schema = z
   .object({
@@ -21,6 +25,7 @@ const schema = z
     body: z.string().optional(),
     schedule: z.enum(["now", "today", "thursday", "window"]).optional(),
     todayTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+    replyToLast: z.boolean().optional(),
   })
   .refine((v) => v.templateId || (v.subject?.trim() && v.body?.trim()), {
     message: "Pick a template or write a subject and body.",
@@ -69,9 +74,24 @@ export async function POST(request: Request) {
 
   const scheduledFor = resolveSchedule(parsed.data.schedule ?? "now", new Date(), parsed.data.todayTime);
 
-  if (result.drafts.length) {
+  // Last email you sent each lead (newest first), for replying in its thread.
+  const lastSent = new Map<string, { id: string; subject: string | null }>();
+  if (parsed.data.replyToLast && result.drafts.length) {
+    const sent = await prisma.emailMessage.findMany({
+      where: { contactId: { in: result.drafts.map((d) => d.contactId) }, direction: "outbound", sentAt: { not: null } },
+      orderBy: { sentAt: "desc" },
+      select: { id: true, contactId: true, subject: true },
+    });
+    for (const m of sent) if (!lastSent.has(m.contactId)) lastSent.set(m.contactId, { id: m.id, subject: m.subject });
+  }
+  const drafts = result.drafts.map((d) => {
+    const prev = lastSent.get(d.contactId);
+    return prev ? { ...d, subject: replySubject(prev.subject), parentMessageId: prev.id } : { ...d, parentMessageId: null };
+  });
+
+  if (drafts.length) {
     await prisma.emailMessage.createMany({
-      data: result.drafts.map((d) => ({
+      data: drafts.map((d) => ({
         contactId: d.contactId,
         templateId: template?.id ?? null,
         direction: "outbound",
@@ -80,20 +100,22 @@ export async function POST(request: Request) {
         body: d.body,
         status: "queued",
         scheduledFor,
+        parentMessageId: d.parentMessageId,
       })),
     });
     await prisma.activity.createMany({
-      data: result.drafts.map((d) => ({
+      data: drafts.map((d) => ({
         contactId: d.contactId,
         type: "email_queued",
-        summary: `Added to Ready to send: ${d.subject || "(no subject)"}`,
+        summary: `${d.parentMessageId ? "Added a reply to Ready to send" : "Added to Ready to send"}: ${d.subject || "(no subject)"}`,
       })),
     });
   }
 
   return NextResponse.json({
     ok: true,
-    created: result.drafts.length,
+    created: drafts.length,
+    replies: drafts.filter((d) => d.parentMessageId).length,
     skipped: result.skipped,
     scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
     needsFixing: result.drafts.filter((d) => d.missing.length).map((d) => ({ contactId: d.contactId, missing: d.missing })),

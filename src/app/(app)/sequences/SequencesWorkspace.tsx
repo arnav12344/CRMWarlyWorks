@@ -66,27 +66,31 @@ export function SequencesWorkspace({
 }) {
   const [tab, setTab] = React.useState<Tab>("sequences");
 
-  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
-    { key: "sequences", label: "Sequences", icon: <ListOrdered className="h-4 w-4" /> },
-    { key: "templates", label: "Templates", icon: <FileText className="h-4 w-4" /> },
-    { key: "snippets", label: "Proof-point snippets", icon: <Sparkles className="h-4 w-4" /> },
+  const tabs: { key: Tab; label: string; short: string; icon: React.ReactNode }[] = [
+    { key: "sequences", label: "Sequences", short: "Sequences", icon: <ListOrdered className="h-4 w-4 shrink-0" aria-hidden /> },
+    { key: "templates", label: "Templates", short: "Templates", icon: <FileText className="h-4 w-4 shrink-0" aria-hidden /> },
+    { key: "snippets", label: "Proof-point snippets", short: "Snippets", icon: <Sparkles className="h-4 w-4 shrink-0" aria-hidden /> },
   ];
 
   return (
     <div className="space-y-5">
-      <div className="flex gap-1 rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+      <div role="tablist" aria-label="Sequences and templates" className="flex gap-1 rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
         {tabs.map((t) => (
           <button
             key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
             onClick={() => setTab(t.key)}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            className={`flex min-h-[40px] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-2 text-sm font-medium transition-colors sm:gap-2 sm:px-3 ${
               tab === t.key
                 ? "bg-brand-50 text-brand-700"
                 : "text-gray-600 hover:bg-gray-100"
             }`}
           >
             {t.icon}
-            {t.label}
+            <span className="truncate sm:hidden">{t.short}</span>
+            <span className="hidden truncate sm:inline">{t.label}</span>
           </button>
         ))}
       </div>
@@ -137,7 +141,7 @@ function TemplatesTab({ templates }: { templates: TemplateDTO[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-gray-500">
           Use <code className="rounded bg-gray-100 px-1">{"{{firstName}}"}</code>,{" "}
           <code className="rounded bg-gray-100 px-1">{"{{orgName}}"}</code>,{" "}
@@ -145,8 +149,8 @@ function TemplatesTab({ templates }: { templates: TemplateDTO[] }) {
           <code className="rounded bg-gray-100 px-1">{"{{contactType}}"}</code> and{" "}
           <code className="rounded bg-gray-100 px-1">{"{{snippet:Label}}"}</code>.
         </p>
-        <Button size="sm" onClick={startNew}>
-          <Plus className="h-4 w-4" /> New template
+        <Button size="sm" onClick={startNew} className="shrink-0 self-start sm:self-auto">
+          <Plus className="h-4 w-4" aria-hidden /> New template
         </Button>
       </div>
 
@@ -166,23 +170,23 @@ function TemplatesTab({ templates }: { templates: TemplateDTO[] }) {
           {templates.map((t) => (
             <Card key={t.id}>
               <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle>{t.name}</CardTitle>
-                    <CardDescription>{t.subject}</CardDescription>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <CardTitle className="break-words">{t.name}</CardTitle>
+                    <CardDescription className="break-words">{t.subject}</CardDescription>
                   </div>
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => startEdit(t)}>
-                      <Pencil className="h-4 w-4" />
+                  <div className="flex shrink-0 gap-1">
+                    <Button variant="ghost" size="sm" className="h-10 w-10 px-0" onClick={() => startEdit(t)} aria-label={`Edit template ${t.name}`}>
+                      <Pencil className="h-4 w-4" aria-hidden />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => remove(t.id)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
+                    <Button variant="ghost" size="sm" className="h-10 w-10 px-0" onClick={() => remove(t.id)} aria-label={`Delete template ${t.name}`}>
+                      <Trash2 className="h-4 w-4 text-red-600" aria-hidden />
                     </Button>
                   </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <pre className="whitespace-pre-wrap font-sans text-sm text-gray-600">
+                <pre className="whitespace-pre-wrap break-words font-sans text-sm text-gray-600">
                   {t.body}
                 </pre>
               </CardContent>
@@ -265,13 +269,13 @@ function SnippetsTab({ snippets }: { snippets: SnippetDTO[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-gray-500">
           Reusable proof points and value props. Insert with{" "}
           <code className="rounded bg-gray-100 px-1">{"{{snippet:Label}}"}</code>.
         </p>
-        <Button size="sm" onClick={startNew}>
-          <Plus className="h-4 w-4" /> New snippet
+        <Button size="sm" onClick={startNew} className="shrink-0 self-start sm:self-auto">
+          <Plus className="h-4 w-4" aria-hidden /> New snippet
         </Button>
       </div>
 
@@ -291,34 +295,36 @@ function SnippetsTab({ snippets }: { snippets: SnippetDTO[] }) {
           {snippets.map((s) => (
             <Card key={s.id}>
               <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle>{s.label}</CardTitle>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <CardTitle className="break-words">{s.label}</CardTitle>
                     {s.category ? (
                       <Badge tone="brand" className="mt-1">
                         {s.category}
                       </Badge>
                     ) : null}
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex shrink-0 gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="h-10 w-10 px-0"
+                      aria-label={`Edit snippet ${s.label}`}
                       onClick={() => {
                         setEditing(s);
                         setOpen(true);
                       }}
                     >
-                      <Pencil className="h-4 w-4" />
+                      <Pencil className="h-4 w-4" aria-hidden />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => remove(s.id)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
+                    <Button variant="ghost" size="sm" className="h-10 w-10 px-0" onClick={() => remove(s.id)} aria-label={`Delete snippet ${s.label}`}>
+                      <Trash2 className="h-4 w-4 text-red-600" aria-hidden />
                     </Button>
                   </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-gray-600">{s.body}</p>
+                <p className="whitespace-pre-wrap break-words text-sm text-gray-600">{s.body}</p>
               </CardContent>
             </Card>
           ))}
@@ -409,19 +415,22 @@ function SequencesTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-gray-500">
           Cadences auto-stop when a contact replies, bounces, or opts out.
-          Day offsets are counted in Singapore business days.
+          Day offsets are counted in Singapore business days. Steps after the
+          first go out as replies in the same thread (&quot;Re: &lt;first
+          subject&gt;&quot;), so only the first step&apos;s subject is used.
         </p>
         <Button
           size="sm"
+          className="shrink-0 self-start sm:self-auto"
           onClick={() => {
             reset();
             setOpen(true);
           }}
         >
-          <Plus className="h-4 w-4" /> New sequence
+          <Plus className="h-4 w-4" aria-hidden /> New sequence
         </Button>
       </div>
 
@@ -440,20 +449,20 @@ function SequencesTab({
           {sequences.map((seq) => (
             <Card key={seq.id}>
               <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle>{seq.name}</CardTitle>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <CardTitle className="break-words">{seq.name}</CardTitle>
                     <CardDescription>
                       {seq.steps.length} step{seq.steps.length === 1 ? "" : "s"} ·{" "}
                       {seq.enrollments} enrolled
                     </CardDescription>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <Badge tone={seq.isActive ? "success" : "neutral"}>
                       {seq.isActive ? "Active" : "Paused"}
                     </Badge>
-                    <Button variant="ghost" size="sm" onClick={() => remove(seq.id)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
+                    <Button variant="ghost" size="sm" className="h-10 w-10 px-0" onClick={() => remove(seq.id)} aria-label={`Delete sequence ${seq.name}`}>
+                      <Trash2 className="h-4 w-4 text-red-600" aria-hidden />
                     </Button>
                   </div>
                 </div>
@@ -463,7 +472,7 @@ function SequencesTab({
                   {seq.steps.map((st) => (
                     <li
                       key={st.id}
-                      className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm"
                     >
                       <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">
                         {st.order + 1}
@@ -509,12 +518,14 @@ function SequencesTab({
             {steps.map((step, i) => (
               <div
                 key={i}
-                className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded-lg border border-gray-200 p-2"
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-2"
               >
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">
                   {i + 1}
                 </span>
                 <Select
+                  aria-label={`Template for step ${i + 1}`}
+                  className="min-w-[10rem] flex-1"
                   value={step.templateId ?? ""}
                   onChange={(e) => {
                     const next = [...steps];
@@ -529,12 +540,14 @@ function SequencesTab({
                     </option>
                   ))}
                 </Select>
-                <div className="flex items-center gap-1">
+                <div className="ml-auto flex items-center gap-1">
                   <span className="text-xs text-gray-500">+</span>
                   <Input
                     type="number"
+                    inputMode="numeric"
                     min={0}
                     className="w-16"
+                    aria-label={`Business days for step ${i + 1}`}
                     value={step.dayOffset}
                     onChange={(e) => {
                       const next = [...steps];
@@ -547,10 +560,12 @@ function SequencesTab({
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="h-10 w-10 px-0"
+                  aria-label={`Remove step ${i + 1}`}
                   onClick={() => setSteps(steps.filter((_, idx) => idx !== i))}
                   disabled={steps.length === 1}
                 >
-                  <Trash2 className="h-4 w-4 text-red-500" />
+                  <Trash2 className="h-4 w-4 text-red-600" aria-hidden />
                 </Button>
               </div>
             ))}

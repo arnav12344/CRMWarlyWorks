@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { isEmailSuppressed, SENDABLE_STATUSES } from "@/lib/outreach";
+import { replySubject } from "@/lib/mail/compose";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,13 @@ export async function POST(request: Request) {
       where: { id },
       data: { subject, body, status, error: null },
     });
+    // Its unsent follow-ups reply in this email's thread: keep their subject in step.
+    if (subject.trim() && subject !== existing.subject) {
+      await prisma.emailMessage.updateMany({
+        where: { parentMessageId: id, direction: "outbound", sentAt: null },
+        data: { subject: replySubject(subject) },
+      });
+    }
     return NextResponse.json({ message });
   }
 

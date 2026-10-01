@@ -22,7 +22,8 @@ Everything else (contacts, sequences & templates, analytics, settings) lives und
 | **Database** | Supabase Postgres via Prisma. Row Level Security is enabled on every table so Supabase's public Data API can't read them; the app connects as the table owner. |
 | **Sending** | Gmail SMTP, logged in as `GMAIL_USER`, From: `MAIL_FROM_ADDRESS` (a verified Gmail "Send mail as" alias). Gmail keeps a copy in Sent. |
 | **Replies** | Cloudflare Email Routing forwards mail for a@warlyworks.com into the Gmail inbox. The app reads new INBOX messages over IMAP and classifies them: reply, bounce, opt-out ("unsubscribe"), auto-reply, or unrelated. |
-| **Follow-ups** | Sequence steps are drafted into **Ready to send** when due (business days, Singapore time). Nothing is sent automatically — you always click Send. |
+| **Follow-ups** | Sequence steps are drafted into **Ready to send** when due (business days, Singapore time). Every follow-up (sequence steps after the first, write-your-own follow-ups, "reply to my last email") is sent as a **reply in the same thread**: `Re: <first subject>`, `In-Reply-To`/`References` headers, earlier emails quoted underneath. |
+| **Signature** | Gmail doesn't add your signature to SMTP mail, so the app appends it. Settings → Email signature → **Import from Gmail** reads it from a recent email you sent from Gmail on the web (IMAP, Sent folder), or type a plain one. |
 
 ### Send safety checks (`src/lib/outreach.ts → sendMessage`)
 
@@ -30,8 +31,11 @@ A message is only sent when **all** of these pass: not already sent/replied/boun
 contact has an email and isn't suppressed, not a reserved demo domain, no
 unfilled merge fields (`[firstName?]`), its sequence hasn't been stopped, the
 **daily limit** (default 50/day, Singapore time) isn't reached, and Gmail is
-configured. The message is claimed atomically first so a double click can't send
-twice. Every email gets an opt-out line and a `List-Unsubscribe` header.
+configured, and — for a follow-up — its first email has already gone out. The
+message is claimed atomically first so a double click can't send twice. Emails
+carry no opt-out footer or `List-Unsubscribe` header (they read like a normal
+personal email); a reply such as "unsubscribe" or "remove me" still suppresses
+the contact automatically.
 
 ### Personalization
 

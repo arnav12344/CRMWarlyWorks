@@ -9,29 +9,34 @@
  *   - the sequence it belongs to has not been stopped (e.g. they replied)
  *   - the daily send limit (Singapore day) is not reached
  *   - a mail account is configured
+ *   - a follow-up's first email has actually gone out
  * It then atomically claims the message (status -> "sending") so a double
- * click can never send twice, sends it with the opt-out footer, and records
- * the Message-ID so replies can be matched back.
+ * click can never send twice, sends it, and records the Message-ID so replies
+ * can be matched back.
+ *
+ * Follow-ups (sequence steps after the first, write-your-own follow-ups, and
+ * "reply to my last email" sends) go out as REPLIES in the same thread:
+ * "Re: <first subject>", In-Reply-To / References headers, and the earlier
+ * emails quoted underneath like Gmail does. Your signature (Settings) is
+ * appended to every email. There is no opt-out footer; a reply such as
+ * "unsubscribe" or "remove me" still suppresses the contact automatically.
  *
  * Replies / bounces / opt-outs are detected from the real inbox in
  * src/lib/mail/inbound.ts, which reuses the helpers exported here.
  */
 
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { scheduleFollowUps, addBusinessDays, APP_TIMEZONE } from "./reminders";
 import { normalizeEmail } from "./email";
 import { dayRange } from "./time";
 import { SEED_STAGE_NAME_BY_ROLE, type StageRole } from "./stageRoles";
 import type { Mailer } from "./mail/mailer";
 import { findPlaceholders } from "./placeholders";
+import { buildEmailContent, replySubject, type QuotedMessage, type Signature } from "./mail/compose";
 
 type Db = PrismaClient;
 
 export const DEFAULT_DAILY_SEND_LIMIT = 50;
-
-/** Appended to every outbound email. Replies containing "unsubscribe" auto-suppress. */
-export const OPT_OUT_FOOTER =
-  "--\nNot relevant? Just reply \"unsubscribe\" and I won't email again.";
 
 /** Statuses from which a message may be (re)sent. */
 export const SENDABLE_STATUSES = ["draft", "queued", "approved", "failed"] as const;
@@ -43,13 +48,6 @@ const RESERVED_TLDS = [".example", ".invalid", ".test", ".localhost"];
 export function isReservedDomain(email: string): boolean {
   const lower = email.toLowerCase();
   return RESERVED_TLDS.some((tld) => lower.endsWith(tld));
-}
-
-/** Body exactly as it will be sent (opt-out footer appended once). */
-export function withFooter(body: string): string {
-  const trimmed = body.replace(/\s+$/, "");
-  if (trimmed.includes(OPT_OUT_FOOTER)) return trimmed;
-  return `${trimmed}\n\n${OPT_OUT_FOOTER}`;
 }
 
 /** Is this email on the suppression (do-not-contact) list? Case-insensitive. */
@@ -101,6 +99,7 @@ export type SendFailureCode =
   | "daily_limit"
   | "in_progress"
   | "scheduled"
+  | "waiting_parent"
   | "send_failed";
 
 export interface SendResult {
@@ -120,6 +119,96 @@ export interface SendOptions {
   dailyLimit?: number;
   /** When true, a message scheduled for the future is skipped (used by the cron). */
   respectSchedule?: boolean;
+  /** Appended to the email (HTML + text). Null/absent = no signature. */
+  signature?: Signature | null;
+}
+
+/** The fields of an outbound email needed to thread a reply to it. */
+interface ThreadRow {
+  id: string;
+  subject: string | null;
+  body: string | null;
+  sentAt: Date | null;
+  messageIdHeader: string | null;
+  inReplyTo: string | null;
+  fromAddress: string | null;
+}
+
+export type ReplyThread =
+  | { kind: "new" }
+  /** A follow-up whose first email hasn't been sent yet. */
+  | { kind: "waiting" }
+  | {
+      kind: "reply";
+      /** The latest sent email of the thread — the one this replies to. */
+      target: ThreadRow;
+      /** The thread oldest → newest, ending with `target`. */
+      chain: ThreadRow[];
+      /** "Re: <subject of the first email>". */
+      subject: string;
+    };
+
+const MAX_THREAD_DEPTH = 25;
+
+/**
+ * Is this email a reply in an existing thread, and to which email?
+ *  - linked follow-up (parentMessageId): replies to the latest sent email of
+ *    {its parent + the parent's other follow-ups}; waits if the parent is unsent
+ *  - sequence step: replies to the latest sent email of the same enrollment
+ *  - anything else starts a new thread
+ * The chain is walked back through each email's In-Reply-To for References.
+ */
+export async function resolveReplyThread(
+  db: Db,
+  message: { id: string; contactId: string; parentMessageId?: string | null; sequenceEnrollmentId?: string | null; subject?: string | null }
+): Promise<ReplyThread> {
+  const sentWhere = {
+    contactId: message.contactId,
+    direction: "outbound",
+    sentAt: { not: null },
+    id: { not: message.id },
+  };
+  const candidates: ThreadRow[] = [];
+
+  if (message.parentMessageId) {
+    const parent = await db.emailMessage.findUnique({ where: { id: message.parentMessageId } });
+    if (parent && parent.direction !== "inbound") {
+      if (!parent.sentAt) return { kind: "waiting" };
+      candidates.push(parent);
+      candidates.push(
+        ...(await db.emailMessage.findMany({
+          where: { ...sentWhere, parentMessageId: parent.id },
+          orderBy: { sentAt: "desc" },
+          take: 1,
+        }))
+      );
+    }
+  } else if (message.sequenceEnrollmentId) {
+    candidates.push(
+      ...(await db.emailMessage.findMany({
+        where: { ...sentWhere, sequenceEnrollmentId: message.sequenceEnrollmentId },
+        orderBy: { sentAt: "desc" },
+        take: 1,
+      }))
+    );
+  }
+
+  const target = candidates
+    .filter((m) => m.sentAt)
+    .sort((a, b) => new Date(b.sentAt as Date).getTime() - new Date(a.sentAt as Date).getTime())[0];
+  if (!target) return { kind: "new" };
+
+  const chain: ThreadRow[] = [target];
+  const seen = new Set([target.id]);
+  let cur = target;
+  while (chain.length < MAX_THREAD_DEPTH && cur.inReplyTo) {
+    const prev = await db.emailMessage.findFirst({ where: { messageIdHeader: cur.inReplyTo, direction: "outbound" } });
+    if (!prev || seen.has(prev.id)) break;
+    chain.unshift(prev);
+    seen.add(prev.id);
+    cur = prev;
+  }
+  return { kind: "reply", target, chain, subject: replySubject(chain[0].subject ?? message.subject) };
 }
 
 /** Outbound messages sent during the local (Singapore) day containing `now`. */
@@ -162,9 +251,16 @@ export async function sendMessage(db: Db, messageId: string, opts: SendOptions):
     return fail("demo_address", `${to} is a demo address (reserved domain) — not sending.`);
   }
 
-  const subject = (message.subject ?? "").trim();
+  // Follow-ups go out as a reply in the first email's thread, so they keep its
+  // subject ("Re: …") and must never go out before it.
+  const thread = await resolveReplyThread(db, message);
+  if (thread.kind === "waiting") {
+    return fail("waiting_parent", "This follow-up goes out after its first email — send that one first.");
+  }
+
+  const subject = thread.kind === "reply" ? thread.subject : (message.subject ?? "").trim();
   if (!subject) return fail("empty_subject", "Subject is empty.");
-  const placeholders = findPlaceholders(message.subject, message.body);
+  const placeholders = findPlaceholders(subject, message.body);
   if (placeholders.length) {
     return fail("placeholders", `Fill in the missing merge fields first: ${placeholders.join(", ")}`);
   }
@@ -204,16 +300,29 @@ export async function sendMessage(db: Db, messageId: string, opts: SendOptions):
   });
   if (claim.count === 0) return fail("in_progress", "This email is already being sent.");
 
-  const text = withFooter(message.body ?? "");
+  const mailer = opts.mailer;
+  const reply = thread.kind === "reply" ? thread : null;
+  const quoted: QuotedMessage[] = (reply?.chain ?? [])
+    .filter((m) => (m.body ?? "").trim())
+    .map((m) => ({
+      body: m.body,
+      sentAt: m.sentAt ? new Date(m.sentAt) : null,
+      fromName: mailer.fromName,
+      fromAddress: m.fromAddress || mailer.fromAddress,
+    }));
+  const content = buildEmailContent({ body: message.body, signature: opts.signature, thread: quoted, timeZone });
+  const references = (reply?.chain ?? []).map((m) => m.messageIdHeader).filter((id): id is string => !!id);
+  const inReplyTo = reply?.target.messageIdHeader ?? null;
+
   let sentId: string;
   try {
-    const result = await opts.mailer.send({
+    const result = await mailer.send({
       to,
       subject,
-      text,
-      headers: {
-        "List-Unsubscribe": `<mailto:${opts.mailer.fromAddress}?subject=unsubscribe>`,
-      },
+      text: content.text,
+      html: content.html,
+      ...(inReplyTo ? { inReplyTo } : {}),
+      ...(references.length ? { references } : {}),
     });
     sentId = result.messageId;
   } catch (err) {
@@ -225,16 +334,19 @@ export async function sendMessage(db: Db, messageId: string, opts: SendOptions):
     return fail("send_failed", `Send failed: ${error}`);
   }
 
+  // The body stays as you wrote it; the signature and quoted history are
+  // rebuilt at send time and never stored inside it.
   await db.emailMessage.update({
     where: { id: messageId },
     data: {
       status: "sent",
       sentAt: now,
-      body: text,
       subject,
       toAddress: to,
-      fromAddress: opts.mailer.fromAddress,
+      fromAddress: mailer.fromAddress,
       messageIdHeader: sentId,
+      // For outbound mail: the Message-ID this email replied to (thread link).
+      inReplyTo,
       scheduledFor: null,
       error: null,
     },
@@ -243,8 +355,8 @@ export async function sendMessage(db: Db, messageId: string, opts: SendOptions):
     data: {
       contactId: contact.id,
       type: "email_sent",
-      summary: `Sent: ${subject}`,
-      meta: JSON.stringify({ messageId, to }),
+      summary: reply ? `Sent (reply in thread): ${subject}` : `Sent: ${subject}`,
+      meta: JSON.stringify({ messageId, to, inReplyTo }),
     },
   });
   await moveToStage(db, contact.id, "contacted", { onlyForward: true });
@@ -306,7 +418,15 @@ export interface ReleaseResult {
  */
 export async function releaseScheduled(
   db: Db,
-  opts: { mailer: Mailer | null; now?: Date; timeZone?: string; dailyLimit?: number; max?: number; includeWindow?: boolean }
+  opts: {
+    mailer: Mailer | null;
+    now?: Date;
+    timeZone?: string;
+    dailyLimit?: number;
+    max?: number;
+    includeWindow?: boolean;
+    signature?: Signature | null;
+  }
 ): Promise<ReleaseResult> {
   const now = opts.now ?? new Date();
   const timeZone = opts.timeZone ?? APP_TIMEZONE;
@@ -315,12 +435,20 @@ export async function releaseScheduled(
   const result: ReleaseResult = { attempted: 0, sent: 0, failed: 0, hitLimit: false };
   if (!opts.mailer) return result;
 
-  const orConditions: Record<string, unknown>[] = [{ scheduledFor: { lte: now } }];
+  const orConditions: Prisma.EmailMessageWhereInput[] = [{ scheduledFor: { lte: now } }];
   // During the weekly window, also flush anything explicitly parked for it.
   if (opts.includeWindow) orConditions.push({ scheduledFor: null });
 
   const due = await db.emailMessage.findMany({
-    where: { direction: "outbound", status: { in: ["queued", "approved"] }, OR: orConditions },
+    where: {
+      direction: "outbound",
+      status: { in: ["queued", "approved"] },
+      AND: [
+        { OR: orConditions },
+        // A follow-up only once its first email has gone out (it's a reply to it).
+        { OR: [{ parentMessageId: null }, { parentMessage: { is: { sentAt: { not: null } } } }] },
+      ],
+    },
     orderBy: [{ scheduledFor: "asc" }, { createdAt: "asc" }],
     take: max,
     select: { id: true },
@@ -333,12 +461,19 @@ export async function releaseScheduled(
       break;
     }
     result.attempted += 1;
-    const res = await sendMessage(db, m.id, { mailer: opts.mailer, now, timeZone, dailyLimit, respectSchedule: true });
+    const res = await sendMessage(db, m.id, {
+      mailer: opts.mailer,
+      now,
+      timeZone,
+      dailyLimit,
+      respectSchedule: true,
+      signature: opts.signature,
+    });
     if (res.ok) result.sent += 1;
     else if (res.code === "daily_limit") {
       result.hitLimit = true;
       break;
-    } else if (res.code !== "scheduled") result.failed += 1;
+    } else if (res.code !== "scheduled" && res.code !== "waiting_parent") result.failed += 1;
   }
   return result;
 }

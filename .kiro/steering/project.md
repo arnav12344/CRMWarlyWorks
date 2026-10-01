@@ -28,8 +28,8 @@ A cold-outreach CRM for a founder doing personalized outreach to Singapore schoo
 - Steps: `/leads` (+ `/import`), `/verification`, `/send` (Ready to send + New email wizard), `/replies` (replies, follow-ups, pipeline)
 - "More": `/contacts`, `/contacts/[id]`, `/sequences`, `/analytics`, `/settings`
 - Nav config: `src/components/steps.ts`; shell: `Sidebar.tsx`, `Topbar.tsx`, `(app)/layout.tsx`
-- Send engine: `src/lib/outreach.ts` (`sendMessage` with safety checks, daily limit, opt-out footer)
-- Mail: `src/lib/mail/{config,mailer,inbound,inbox}.ts`; cron: `src/lib/cron.ts` + `/api/cron/tick` (needs `CRON_SECRET`)
+- Send engine: `src/lib/outreach.ts` (`sendMessage` with safety checks, daily limit, follow-ups threaded as replies, signature; no opt-out footer)
+- Mail: `src/lib/mail/{config,mailer,inbound,inbox,compose,signature,signatureStore}.ts`; cron: `src/lib/cron.ts` + `/api/cron/tick` (needs `CRON_SECRET`)
 - Sequences: `src/lib/sequences.ts` (drafts due steps into Ready to send; never auto-sends)
 - Verification: `src/lib/verify/*` — live providers only when a key exists; mock only outside production; credits in `credits.ts`
 - Seed: `src/lib/seed/config.ts` (idempotent config), `prisma/seed.ts` (guarded demo)

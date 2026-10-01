@@ -21,11 +21,12 @@ describe("scheduleFollowUpEmails", () => {
 
     const res = await scheduleFollowUpEmails(asDb(db), {
       firstMessageId: "m-first",
+      firstSubject: "Your Christmas show + 5 speaking turns",
       contactId: "c1",
       toAddress: "info@centre-stage.com",
       followUps: [
-        { subject: "Nudge 1", body: "Just checking in", when: { kind: "afterDays", days: 2 } },
-        { subject: "Nudge 2", body: "One more time", when: { kind: "date", dateISO } },
+        { body: "Just checking in", when: { kind: "afterDays", days: 2 } },
+        { subject: "typed but ignored", body: "One more time", when: { kind: "date", dateISO } },
       ],
       now: NOW,
     });
@@ -35,26 +36,28 @@ describe("scheduleFollowUpEmails", () => {
     expect(followUps).toHaveLength(2);
 
     const [f1, f2] = followUps;
+    // Follow-ups reply in the first email's thread, so they share its subject.
     expect(f1).toMatchObject({
       status: "waiting",
       followUpAfterDays: 2,
       scheduledFor: null,
-      subject: "Nudge 1",
+      subject: "Re: Your Christmas show + 5 speaking turns",
       toAddress: "info@centre-stage.com",
       direction: "outbound",
     });
-    expect(f2).toMatchObject({ status: "queued", followUpAfterDays: null, subject: "Nudge 2" });
+    expect(f2).toMatchObject({ status: "queued", followUpAfterDays: null, subject: "Re: Your Christmas show + 5 speaking turns" });
     expect((f2.scheduledFor as Date).toISOString()).toBe(dateISO);
   });
 
-  it("does not append the opt-out footer (sendMessage does that at send time)", async () => {
+  it("stores only the body you wrote (no footer; the signature is added at send time)", async () => {
     const db = new FakeDb();
     seedFirst(db);
     await scheduleFollowUpEmails(asDb(db), {
       firstMessageId: "m-first",
+      firstSubject: "Hello",
       contactId: "c1",
       toAddress: "info@centre-stage.com",
-      followUps: [{ subject: "Nudge", body: "Body only", when: { kind: "afterDays", days: 2 } }],
+      followUps: [{ body: "Body only", when: { kind: "afterDays", days: 2 } }],
       now: NOW,
     });
     const f = db.messages.find((m) => m.parentMessageId === "m-first");
@@ -62,14 +65,15 @@ describe("scheduleFollowUpEmails", () => {
     expect(String(f?.body)).not.toContain("unsubscribe");
   });
 
-  it("rejects an empty subject and writes nothing", async () => {
+  it("rejects a follow-up with no message and writes nothing", async () => {
     const db = new FakeDb();
     seedFirst(db);
     const res = await scheduleFollowUpEmails(asDb(db), {
       firstMessageId: "m-first",
+      firstSubject: "Hello",
       contactId: "c1",
       toAddress: "info@centre-stage.com",
-      followUps: [{ subject: "   ", body: "x", when: { kind: "afterDays", days: 2 } }],
+      followUps: [{ body: "   ", when: { kind: "afterDays", days: 2 } }],
       now: NOW,
     });
     expect(res.ok).toBe(false);

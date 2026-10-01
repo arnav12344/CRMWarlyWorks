@@ -6,12 +6,11 @@ import {
   sendMessage,
   enrollContact,
   isEmailSuppressed,
-  withFooter,
   findPlaceholders,
   releaseScheduled,
-  OPT_OUT_FOOTER,
 } from "../outreach";
 import { FakeMailer } from "../mail/mailer";
+import { LEGACY_OPT_OUT_FOOTER } from "../mail/compose";
 
 function seedBasic() {
   const db = new FakeDb();
@@ -95,6 +94,14 @@ describe("advanceEnrollments", () => {
     expect(db.enrollments[0].status).toBe("completed");
   });
 
+  it("drafts later steps as a reply: subject is Re: <the first step's subject>", async () => {
+    const db = seedBasic();
+    db.enrollments.push({ id: "e1", contactId: "c1", sequenceId: "seq1", status: "active", currentStep: 1, enrolledAt: NOW });
+    db.messages.push({ id: "m0", contactId: "c1", sequenceEnrollmentId: "e1", direction: "outbound", status: "sent", subject: "Hi Wei", sentAt: NOW, createdAt: NOW });
+    await advanceEnrollments(asDb(db), new Date("2026-01-05T05:00:00Z"));
+    expect(db.messages.at(-1)?.subject).toBe("Re: Hi Wei");
+  });
+
   it("only advances the given enrollmentIds when provided", async () => {
     const db = seedBasic();
     db.enrollments.push(
@@ -129,19 +136,25 @@ describe("advanceEnrollments", () => {
 });
 
 describe("sendMessage — real send pipeline", () => {
-  it("sends, stores Message-ID, appends the opt-out footer, schedules 2 follow-ups", async () => {
+  it("sends text + HTML with no opt-out footer or List-Unsubscribe, stores Message-ID, schedules 2 follow-ups", async () => {
     const db = seedBasic();
     queue(db);
     const mailer = new FakeMailer();
     const res = await sendMessage(asDb(db), "m1", { mailer, now: NOW });
     expect(res.ok).toBe(true);
     expect(mailer.sent).toHaveLength(1);
-    expect(mailer.sent[0].to).toBe("wei@rosyth.edu.sg");
-    expect(mailer.sent[0].text).toContain(OPT_OUT_FOOTER);
-    expect(mailer.sent[0].headers?.["List-Unsubscribe"]).toContain("mailto:");
+    const sent = mailer.sent[0];
+    expect(sent.to).toBe("wei@rosyth.edu.sg");
+    expect(sent.subject).toBe("Hi Wei");
+    expect(sent.text).toBe("Hello from WarlyWorks");
+    expect(sent.text).not.toMatch(/unsubscribe/i);
+    expect(sent.html).toContain("Hello from WarlyWorks");
+    expect(sent.headers?.["List-Unsubscribe"]).toBeUndefined();
+    expect(sent.inReplyTo).toBeUndefined();
     const m = db.messages[0];
     expect(m.status).toBe("sent");
     expect(m.sentAt).toEqual(NOW);
+    expect(m.body).toBe("Hello from WarlyWorks");
     expect(m.messageIdHeader).toBe("fake-1@warlyworks.com");
     expect(m.fromAddress).toBe("a@warlyworks.com");
     expect(db.followUps.map((f) => f.businessDaysOffset).sort()).toEqual([2, 3]);
@@ -328,6 +341,120 @@ describe("sendMessage — real send pipeline", () => {
     expect(res.code).toBe("not_configured");
     expect(db.messages[0].status).toBe("queued");
   });
+
+  it("appends the signature to the text and HTML parts", async () => {
+    const db = seedBasic();
+    queue(db);
+    const mailer = new FakeMailer();
+    const signature = {
+      html: '<div class="gmail_signature">Arnav<br><a href="https://warlyworks.com">warlyworks.com</a></div>',
+      text: "Arnav\nwarlyworks.com",
+    };
+    await sendMessage(asDb(db), "m1", { mailer, now: NOW, signature });
+    expect(mailer.sent[0].text).toBe("Hello from WarlyWorks\n\nArnav\nwarlyworks.com");
+    expect(mailer.sent[0].html).toContain(signature.html);
+    // The stored body stays exactly what you wrote.
+    expect(db.messages[0].body).toBe("Hello from WarlyWorks");
+  });
+});
+
+describe("sendMessage — follow-ups go out as replies in the same thread", () => {
+  const FIRST_SENT = new Date("2025-12-29T01:00:00Z"); // Mon 09:00 SGT
+
+  function firstEmail(db: FakeDb, extra: Record<string, unknown> = {}) {
+    db.messages.push({
+      id: "m0",
+      contactId: "c1",
+      direction: "outbound",
+      status: "sent",
+      subject: "Hi Wei",
+      body: "Hello Wei,\nQuick idea for Rosyth.",
+      sentAt: FIRST_SENT,
+      messageIdHeader: "first-1@warlyworks.com",
+      fromAddress: "a@warlyworks.com",
+      createdAt: FIRST_SENT,
+      ...extra,
+    });
+  }
+
+  it("a sequence step replies to the previous step: Re: subject, In-Reply-To, References, quoted history", async () => {
+    const db = seedBasic();
+    db.enrollments.push({ id: "e1", contactId: "c1", sequenceId: "seq1", status: "active", currentStep: 2, enrolledAt: FIRST_SENT });
+    firstEmail(db, { sequenceEnrollmentId: "e1" });
+    queue(db, { sequenceEnrollmentId: "e1", subject: "Following up", body: "Any thoughts, Wei?" });
+
+    const mailer = new FakeMailer();
+    const res = await sendMessage(asDb(db), "m1", { mailer, now: NOW });
+    expect(res.ok).toBe(true);
+    const sent = mailer.sent[0];
+    expect(sent.subject).toBe("Re: Hi Wei");
+    expect(sent.inReplyTo).toBe("first-1@warlyworks.com");
+    expect(sent.references).toEqual(["first-1@warlyworks.com"]);
+    expect(sent.text).toContain("Any thoughts, Wei?");
+    expect(sent.text).toContain("On Mon, 29 Dec 2025 at 09:00, Arnav from WarlyWorks <a@warlyworks.com> wrote:");
+    expect(sent.text).toContain("> Hello Wei,\n> Quick idea for Rosyth.");
+    expect(sent.html).toContain('class="gmail_quote"');
+
+    const m = db.messages.find((x) => x.id === "m1");
+    expect(m?.subject).toBe("Re: Hi Wei");
+    expect(m?.inReplyTo).toBe("first-1@warlyworks.com");
+    expect(m?.body).toBe("Any thoughts, Wei?");
+  });
+
+  it("a write-your-own follow-up replies to the latest email of its thread, with the whole chain in References", async () => {
+    const db = seedBasic();
+    firstEmail(db);
+    db.messages.push({
+      id: "f1",
+      contactId: "c1",
+      parentMessageId: "m0",
+      direction: "outbound",
+      status: "sent",
+      subject: "Re: Hi Wei",
+      body: "Bumping this up.",
+      sentAt: new Date("2025-12-31T01:00:00Z"),
+      messageIdHeader: "fu-1@warlyworks.com",
+      inReplyTo: "first-1@warlyworks.com",
+      createdAt: FIRST_SENT,
+    });
+    queue(db, { parentMessageId: "m0", subject: "whatever was typed", body: "Last nudge from me!" });
+
+    const mailer = new FakeMailer();
+    expect((await sendMessage(asDb(db), "m1", { mailer, now: NOW })).ok).toBe(true);
+    const sent = mailer.sent[0];
+    expect(sent.subject).toBe("Re: Hi Wei");
+    expect(sent.inReplyTo).toBe("fu-1@warlyworks.com");
+    expect(sent.references).toEqual(["first-1@warlyworks.com", "fu-1@warlyworks.com"]);
+    // Newest quoted first, the first email nested inside it.
+    expect(sent.text.indexOf("> Bumping this up.")).toBeGreaterThan(-1);
+    expect(sent.text).toContain("> > Hello Wei,");
+  });
+
+  it("waits (never sends) while the first email hasn't gone out, and the cron doesn't count it as failed", async () => {
+    const db = seedBasic();
+    firstEmail(db, { status: "queued", sentAt: null, messageIdHeader: null });
+    queue(db, { parentMessageId: "m0", scheduledFor: new Date(NOW.getTime() - 1000) });
+
+    const mailer = new FakeMailer();
+    const res = await sendMessage(asDb(db), "m1", { mailer, now: NOW });
+    expect(res.code).toBe("waiting_parent");
+    expect(mailer.sent).toHaveLength(0);
+    expect(db.messages.find((x) => x.id === "m1")?.status).toBe("queued");
+
+    const run = await releaseScheduled(asDb(db), { mailer, now: NOW, dailyLimit: 50 });
+    expect(run.failed).toBe(0);
+    expect(mailer.sent).toHaveLength(0);
+  });
+
+  it("drops the old opt-out footer from quoted emails sent before it was removed", async () => {
+    const db = seedBasic();
+    firstEmail(db, { body: `Hello Wei\n\n${LEGACY_OPT_OUT_FOOTER}` });
+    queue(db, { parentMessageId: "m0", body: "Any update?" });
+    const mailer = new FakeMailer();
+    await sendMessage(asDb(db), "m1", { mailer, now: NOW });
+    expect(mailer.sent[0].text).toContain("> Hello Wei");
+    expect(mailer.sent[0].text).not.toMatch(/unsubscribe/i);
+  });
 });
 
 describe("releaseScheduled (cron)", () => {
@@ -375,12 +502,6 @@ describe("releaseScheduled (cron)", () => {
 });
 
 describe("helpers", () => {
-  it("withFooter appends the opt-out footer exactly once", () => {
-    const once = withFooter("Hello\n\n");
-    expect(once.endsWith(OPT_OUT_FOOTER)).toBe(true);
-    expect(withFooter(once)).toBe(once);
-  });
-
   it("findPlaceholders lists unresolved merge fields", () => {
     expect(findPlaceholders("Hi [firstName?]", "x [snippet:Proof?] [ok]")).toEqual(["[firstName?]", "[snippet:Proof?]"]);
     expect(findPlaceholders("All good")).toEqual([]);

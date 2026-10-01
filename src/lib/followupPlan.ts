@@ -12,12 +12,16 @@
  *    parent sends, flipping it to "queued". This guarantees a follow-up can
  *    never precede the first email.
  *  - "date": send at a specific instant. Stored as "queued" with `scheduledFor`
- *    already set.
+ *    already set. `sendMessage` still holds it until the first email has sent.
  *
- * The opt-out footer is NOT added here — `sendMessage` appends it at send time.
+ * Every follow-up is sent as a REPLY in the first email's thread, so its
+ * subject is "Re: <first subject>" (set here for display; `sendMessage`
+ * recomputes it from the thread at send time). The signature is added at send
+ * time too — only the body you wrote is stored.
  */
 
 import type { PrismaClient } from "@prisma/client";
+import { replySubject } from "./mail/compose";
 
 type Db = PrismaClient;
 
@@ -26,13 +30,16 @@ export type FollowUpWhen =
   | { kind: "date"; dateISO: string };
 
 export interface FollowUpInput {
-  subject: string;
+  /** Ignored when the first email's subject is known (follow-ups reply in its thread). */
+  subject?: string;
   body: string;
   when: FollowUpWhen;
 }
 
 export interface ScheduleFollowUpsInput {
   firstMessageId: string;
+  /** Subject of the first email; follow-ups get "Re: <this>". */
+  firstSubject?: string;
   contactId: string;
   toAddress: string | null;
   followUps: FollowUpInput[];
@@ -63,9 +70,8 @@ export function validateFollowUps(followUps: FollowUpInput[], now: Date = new Da
   }
   for (const [i, f] of followUps.entries()) {
     const n = i + 1;
-    const subject = f.subject?.trim() ?? "";
-    if (!subject) return { ok: false, reason: `Follow-up ${n}: add a subject.` };
-    if (subject.length > 300) return { ok: false, reason: `Follow-up ${n}: subject is too long (max 300).` };
+    if ((f.subject?.trim().length ?? 0) > 300) return { ok: false, reason: `Follow-up ${n}: subject is too long (max 300).` };
+    if (!f.body?.trim()) return { ok: false, reason: `Follow-up ${n}: write the follow-up message.` };
     if ((f.body?.length ?? 0) > 20000) return { ok: false, reason: `Follow-up ${n}: body is too long.` };
     if (f.when.kind === "afterDays") {
       if (!Number.isInteger(f.when.days) || f.when.days < 1 || f.when.days > MAX_AFTER_DAYS) {
@@ -95,7 +101,7 @@ export async function scheduleFollowUpEmails(
 
   const createdIds: string[] = [];
   for (const f of input.followUps) {
-    const subject = f.subject.trim();
+    const subject = input.firstSubject?.trim() ? replySubject(input.firstSubject) : replySubject(f.subject);
     const body = f.body?.trim() ? f.body.trim().slice(0, 20000) : "";
     const base = {
       contactId: input.contactId,

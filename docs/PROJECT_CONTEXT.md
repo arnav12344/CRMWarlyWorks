@@ -7,6 +7,6 @@ A cold-outreach CRM for a founder doing personalized outreach to Singapore schoo
 - Next.js 15 + TypeScript + Tailwind (navy `brand-*`, marigold `accent-*`), Prisma + Supabase Postgres, hosted on Netlify
 - Real email through Gmail SMTP as `a@warlyworks.com`; replies/bounces/opt-outs read from the Gmail inbox over IMAP (Cloudflare Email Routing forwards the alias)
 - Scheduled function every 10 min: drafts due sequence steps into Ready to send + syncs the inbox
-- Nothing is sent without clicking Send; daily limit 50 (Singapore day); opt-out footer on every email
+- Nothing is sent without clicking Send; daily limit 50 (Singapore day); follow-ups go out as replies in the same thread; your signature (Settings) is appended; no opt-out footer (replies like "unsubscribe" still auto-suppress)
 - Verification only spends credits on unchecked addresses; never mocked in production
 - No login yet — keep the URL private
