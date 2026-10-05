@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { buildBulkDrafts } from "@/lib/bulk";
 import { resolveSchedule } from "@/lib/schedule";
 import { replySubject } from "@/lib/mail/compose";
+import { findPlaceholders } from "@/lib/placeholders";
 
 export const runtime = "nodejs";
 
@@ -118,6 +119,9 @@ export async function POST(request: Request) {
     replies: drafts.filter((d) => d.parentMessageId).length,
     skipped: result.skipped,
     scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
-    needsFixing: result.drafts.filter((d) => d.missing.length).map((d) => ({ contactId: d.contactId, missing: d.missing })),
+    // Saved, but these won't send until the missing fields are filled in.
+    needsFixing: drafts
+      .map((d) => ({ contactId: d.contactId, missing: findPlaceholders(d.subject, d.body) }))
+      .filter((d) => d.missing.length),
   });
 }

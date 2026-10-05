@@ -35,7 +35,7 @@ import { Select } from "@/components/ui/Select";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Stepper } from "@/components/ui/Stepper";
 import { ProgressBar } from "@/components/ui/ProgressBar";
-import { renderEmail, buildMergeContext, type MergeSnippet } from "@/lib/merge";
+import { renderEmail, renderString, buildMergeContext, type MergeSnippet } from "@/lib/merge";
 import { findPlaceholders } from "@/lib/placeholders";
 import { replySubject } from "@/lib/mail/compose";
 
@@ -343,7 +343,9 @@ function ReadyToSend({
   async function saveEdit(m: QueueItem, subject: string, body: string) {
     const { ok, data } = await postJson("/api/messages", { id: m.id, contactId: m.contactId, subject, body, status: "queued" });
     if (ok) {
-      setItems((list) => list.map((x) => (x.id === m.id ? { ...x, subject, body, status: "queued", error: null } : x)));
+      // The server fills in any {{fields}} you typed, so show what it saved.
+      const saved = { subject: data.message?.subject ?? subject, body: data.message?.body ?? body };
+      setItems((list) => list.map((x) => (x.id === m.id ? { ...x, ...saved, status: "queued", error: null } : x)));
       setEditing(null);
     } else setNotice({ tone: "error", text: data.error ?? "Could not save." });
   }
@@ -452,10 +454,11 @@ function ReadyToSend({
                     </div>
                   </div>
 
-                  {m.error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">{m.error}</p> : null}
+                  {m.error && !missing.length ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">{m.error}</p> : null}
                   {missing.length ? (
                     <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      Fill in {missing.join(", ")} before sending — click Edit.
+                      Won&apos;t send{m.scheduledFor ? " (not even on its schedule)" : ""} until you fill in{" "}
+                      {missing.join(", ")}. Click Edit.
                     </p>
                   ) : null}
 
@@ -732,6 +735,10 @@ function NewEmailWizard({
   const seq = sequences.find((s) => s.id === sequenceId) ?? null;
   const messageTemplate =
     mode === "sequence" ? { subject: seq?.steps[0]?.subject ?? "", body: seq?.steps[0]?.body ?? "" } : { subject, body };
+  const followUpBodies = React.useMemo(
+    () => (mode === "followups" ? followUps.map((f) => f.body) : []),
+    [mode, followUps]
+  );
 
   function pickTemplate(id: string) {
     setTemplateId(id);
@@ -747,6 +754,8 @@ function NewEmailWizard({
       const ids = [...selected];
       let created = 0;
       let skipped = 0;
+      // Leads whose emails were saved with a missing field (they won't send until fixed).
+      let needsFixing = 0;
       if (mode === "single") {
         for (let i = 0; i < ids.length; i += 200) {
           const { ok, data } = await postJson("/api/messages/bulk", {
@@ -761,6 +770,7 @@ function NewEmailWizard({
           if (!ok) throw new Error(data.error ?? "Could not create emails.");
           created += data.created;
           skipped += data.skipped?.length ?? 0;
+          needsFixing += data.needsFixing?.length ?? 0;
         }
       } else if (mode === "followups") {
         const followUpPayload = followUps.map((f) => ({
@@ -780,8 +790,10 @@ function NewEmailWizard({
             followUps: followUpPayload,
             replyToLast: threading,
           });
-          if (ok) created += 1;
-          else {
+          if (ok) {
+            created += 1;
+            if (data.needsFixing?.length) needsFixing += 1;
+          } else {
             skipped += 1;
             lastError = data.error ?? lastError;
           }
@@ -811,6 +823,9 @@ function NewEmailWizard({
           : "";
       onDone(
         `Added ${created} email${created === 1 ? "" : "s"} to Ready to send. ${when}${followUpNote}` +
+          (needsFixing
+            ? ` ${needsFixing} lead${needsFixing === 1 ? " has" : "s have"} missing fields and won't send until you fill them in.`
+            : "") +
           (skipped ? ` Skipped ${skipped} (suppressed, no email, demo address or already queued).` : "")
       );
     } catch (e) {
@@ -1012,6 +1027,7 @@ function NewEmailWizard({
           onConfirm={addToReady}
           threading={threading}
           signatureText={signatureText}
+          followUpBodies={followUpBodies}
         />
       ) : null}
     </div>
@@ -1240,10 +1256,13 @@ function PreviewStep({
   onConfirm,
   threading,
   signatureText,
+  followUpBodies,
 }: {
   contacts: ContactDTO[];
   template: { subject: string; body: string };
   snippets: MergeSnippet[];
+  /** Write-your-own follow-ups ("Email + follow-ups"); checked for missing fields too. */
+  followUpBodies: string[];
   mode: "single" | "followups" | "sequence";
   busy: boolean;
   schedule: "now" | "today" | "thursday";
@@ -1269,17 +1288,27 @@ function PreviewStep({
           organization: { name: c.orgName, city: c.city, country: c.country },
           contactTypeName: c.contactType,
         });
-        return renderEmail(template, ctx, snippets);
+        const email = renderEmail(template, ctx, snippets);
+        const asReply = threading && c.sentCount > 0 && !!c.lastSentSubject;
+        const subject = asReply ? replySubject(c.lastSentSubject) : email.subject;
+        // Same check the send engine runs: anything left unfilled blocks sending.
+        const unfilled = [
+          ...findPlaceholders(subject, email.body),
+          ...followUpBodies.flatMap((b, n) =>
+            findPlaceholders(renderString(b, ctx, snippets).text).map((p) => `${p} (follow-up ${n + 1})`)
+          ),
+        ];
+        return { ...email, subject, asReply, unfilled };
       }),
-    [contacts, template, snippets]
+    [contacts, template, snippets, followUpBodies, threading]
   );
-  const withIssues = rendered.filter((r) => r.missing.length || r.missingSnippets.length).length;
+  const withIssues = rendered.filter((r) => r.unfilled.length).length;
   const c = contacts[Math.min(i, contacts.length - 1)];
   const r = rendered[Math.min(i, rendered.length - 1)];
 
   if (!c || !r) return null;
-  const asReply = threading && c.sentCount > 0 && !!c.lastSentSubject;
-  const shownSubject = asReply ? replySubject(c.lastSentSubject) : r.subject;
+  const asReply = r.asReply;
+  const shownSubject = r.subject;
 
   return (
     <Card>
@@ -1295,8 +1324,9 @@ function PreviewStep({
         {withIssues ? (
           <p className="flex items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
-            {withIssues} email{withIssues === 1 ? " has" : "s have"} missing fields. They&apos;ll be added, but you&apos;ll need to
-            edit them before they can be sent. Tip: use a fallback like {"{{firstName|there}}"}.
+            {withIssues} of {contacts.length} lead{contacts.length === 1 ? "" : "s"} {withIssues === 1 ? "has" : "have"} missing
+            fields. Those emails won&apos;t send (not even on a schedule) until you fill them in from Ready to send. Tip: use a
+            fallback like {"{{firstName|there}}"}.
           </p>
         ) : null}
 
@@ -1346,9 +1376,9 @@ function PreviewStep({
             </div>
           )}
         </div>
-        {r.missing.length || r.missingSnippets.length ? (
-          <p className="text-xs text-amber-900">
-            Missing for this lead: {[...r.missing, ...r.missingSnippets.map((s) => `snippet ${s}`)].join(", ")}
+        {r.unfilled.length ? (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            Won&apos;t send until filled in: {r.unfilled.join(", ")}
           </p>
         ) : null}
 

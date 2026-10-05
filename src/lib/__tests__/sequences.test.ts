@@ -208,6 +208,23 @@ describe("sendMessage — real send pipeline", () => {
     expect(res.reason).toContain("[firstName?]");
   });
 
+  it("never sends raw {{fields}} or fill-in brackets, in the subject or body", async () => {
+    for (const extra of [
+      { subject: "Helping {{orgName}}" },
+      { body: "Hi {{firstName|there}}, quick one" },
+      { body: "Loved your [specific programme detail]." },
+    ]) {
+      const db = seedBasic();
+      queue(db, extra);
+      const mailer = new FakeMailer();
+      const res = await sendMessage(asDb(db), "m1", { mailer, now: NOW });
+      expect(res.code).toBe("placeholders");
+      expect(res.reason).toMatch(/^Not sent: fill in the missing fields first/);
+      expect(mailer.sent).toHaveLength(0);
+      expect(db.messages[0].status).toBe("queued");
+    }
+  });
+
   it("blocks reserved demo domains", async () => {
     const db = seedBasic();
     db.contacts[0].email = "grace@rivervale.example";
@@ -491,6 +508,26 @@ describe("releaseScheduled (cron)", () => {
     expect(on.sent).toBe(1);
   });
 
+  it("holds an email with a missing field: marks it failed with the reason, doesn't retry it, still sends the rest", async () => {
+    const db = seedBasic();
+    queued(db, "broken", new Date(NOW.getTime() - 2000));
+    db.messages.find((m) => m.id === "broken")!.body = "Hi {{firstName|there}}";
+    queued(db, "fine", new Date(NOW.getTime() - 1000));
+    const mailer = new FakeMailer();
+
+    const res = await releaseScheduled(asDb(db), { mailer, now: NOW, dailyLimit: 50 });
+    expect(res).toMatchObject({ sent: 1, blocked: 1, failed: 0 });
+    expect(mailer.sent).toHaveLength(1);
+    const broken = db.messages.find((m) => m.id === "broken")!;
+    expect(broken.status).toBe("failed");
+    expect(String(broken.error)).toContain("{{firstName|there}}");
+    expect(db.messages.find((m) => m.id === "fine")?.status).toBe("sent");
+
+    const again = await releaseScheduled(asDb(db), { mailer, now: NOW, dailyLimit: 50 });
+    expect(again.attempted).toBe(0);
+    expect(mailer.sent).toHaveLength(1);
+  });
+
   it("stops at the daily limit", async () => {
     const db = seedBasic();
     queued(db, "a", new Date(NOW.getTime() - 2000));
@@ -502,9 +539,36 @@ describe("releaseScheduled (cron)", () => {
 });
 
 describe("helpers", () => {
-  it("findPlaceholders lists unresolved merge fields", () => {
-    expect(findPlaceholders("Hi [firstName?]", "x [snippet:Proof?] [ok]")).toEqual(["[firstName?]", "[snippet:Proof?]"]);
+  it("findPlaceholders lists merge fields with no value", () => {
+    expect(findPlaceholders("Hi [firstName?]", "x [snippet:Proof?]")).toEqual(["[firstName?]", "[snippet:Proof?]"]);
     expect(findPlaceholders("All good")).toEqual([]);
+  });
+
+  it("findPlaceholders catches merge fields that were never filled in", () => {
+    expect(findPlaceholders("Helping {{orgName}}", "Hi {{firstName|there}},\n{{ snippet:Sign-off }}")).toEqual([
+      "{{orgName}}",
+      "{{firstName|there}}",
+      "{{ snippet:Sign-off }}",
+    ]);
+  });
+
+  it("findPlaceholders catches mistyped fields and fill-in-the-blanks", () => {
+    expect(findPlaceholders("Hi {firstName}, loved <<School>>'s [specific detail]. Deck: [link]")).toEqual([
+      "{firstName}",
+      "<<School>>",
+      "[specific detail]",
+      "[link]",
+    ]);
+    expect(findPlaceholders("我们 [学校名称]")).toEqual(["[学校名称]"]);
+  });
+
+  it("findPlaceholders leaves ordinary text alone", () => {
+    expect(
+      findPlaceholders(
+        "Re: Hi Wei",
+        "Students went up 1 grade [1]. Email me at a@b.sg or see https://warlyworks.com/demo?x=1 :) [ ]"
+      )
+    ).toEqual([]);
   });
 });
 

@@ -2,7 +2,7 @@
  * Bulk draft builder for "Write & send": render one template for many leads.
  * Pure (no I/O) so it is unit-tested; the API route loads data and persists.
  */
-import { buildMergeContext, renderEmail, type MergeSnippet } from "./merge";
+import { contactMergeContext, renderEmail, type MergeSnippet } from "./merge";
 import { normalizeEmail } from "./email";
 import { isReservedDomain } from "./outreach";
 
@@ -64,17 +64,7 @@ export function buildBulkDrafts(input: {
       skipped.push({ contactId: c.id, reason: "already in Ready to send" });
       continue;
     }
-    const context = buildMergeContext({
-      firstName: c.firstName,
-      lastName: c.lastName,
-      fullName: c.fullName,
-      title: c.title,
-      email,
-      organization: c.organization
-        ? { name: c.organization.name, city: c.organization.city, country: c.organization.country }
-        : null,
-      contactTypeName: c.organization?.contactType?.name ?? null,
-    });
+    const context = contactMergeContext({ ...c, email });
     const rendered = renderEmail(input.template, context, input.snippets);
     drafts.push({
       contactId: c.id,

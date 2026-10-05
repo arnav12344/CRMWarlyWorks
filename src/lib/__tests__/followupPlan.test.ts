@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { FakeDb } from "./fakeDb";
-import { scheduleFollowUpEmails, validateFollowUps } from "../followupPlan";
+import { personalizePlan, scheduleFollowUpEmails, validateFollowUps } from "../followupPlan";
+import { contactMergeContext } from "../merge";
 
 const asDb = (db: FakeDb) => db as unknown as PrismaClient;
 const NOW = new Date("2026-09-28T02:00:00Z"); // Mon 10:00 Singapore
@@ -99,5 +100,32 @@ describe("scheduleFollowUpEmails", () => {
     expect(validateFollowUps([{ subject: "a", body: "b", when: { kind: "afterDays", days: 61 } }], NOW).ok).toBe(false);
     const many = Array.from({ length: 11 }, () => ({ subject: "a", body: "b", when: { kind: "afterDays" as const, days: 2 } }));
     expect(validateFollowUps(many, NOW).ok).toBe(false);
+  });
+});
+
+describe("personalizePlan (Email + follow-ups)", () => {
+  const snippets = [{ label: "Sign-off", body: "Cheers, Arnav" }];
+  const plan = (contact: Parameters<typeof contactMergeContext>[0]) =>
+    personalizePlan({
+      first: { subject: "Helping {{orgName}}", body: "Hi {{firstName|there}},\n\n{{snippet:Sign-off}}" },
+      followUps: [{ body: "Any thoughts on this for {{orgName|your team}}, {{firstName}}?", when: { kind: "afterDays", days: 2 } }],
+      context: contactMergeContext(contact),
+      snippets,
+    });
+
+  it("fills each lead's fields into the first email and every follow-up", () => {
+    const r = plan({ fullName: "Wei Tan", email: "wei@rosyth.edu.sg", organization: { name: "Rosyth School" } });
+    expect(r.first).toEqual({ subject: "Helping Rosyth School", body: "Hi Wei,\n\nCheers, Arnav" });
+    expect(r.followUps[0].body).toBe("Any thoughts on this for Rosyth School, Wei?");
+    expect(r.followUps[0].when).toEqual({ kind: "afterDays", days: 2 });
+    expect(r.unfilled).toEqual([]);
+  });
+
+  it("uses fallbacks, and flags a field the lead has no value for instead of sending it raw", () => {
+    const r = plan({ email: "info@centre-stage.com", organization: { name: "Centre Stage" } });
+    expect(r.first.body).toBe("Hi there,\n\nCheers, Arnav");
+    expect(r.followUps[0].body).toBe("Any thoughts on this for Centre Stage, [firstName?]?");
+    expect(r.unfilled).toEqual(["[firstName?]"]);
+    expect(JSON.stringify(r)).not.toContain("{{");
   });
 });

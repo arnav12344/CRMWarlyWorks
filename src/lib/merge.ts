@@ -164,6 +164,36 @@ export function buildMergeContext(contact: ContactLike): MergeContext {
   };
 }
 
+/** A contact as loaded with its organization (and the org's contact type). */
+export interface ContactWithOrg {
+  firstName?: string | null;
+  lastName?: string | null;
+  fullName?: string | null;
+  title?: string | null;
+  email?: string | null;
+  organization?: {
+    name?: string | null;
+    city?: string | null;
+    country?: string | null;
+    contactType?: { name: string } | null;
+  } | null;
+}
+
+/** Merge context for a contact row loaded with `organization { name city country contactType { name } }`. */
+export function contactMergeContext(c: ContactWithOrg): MergeContext {
+  return buildMergeContext({
+    firstName: c.firstName,
+    lastName: c.lastName,
+    fullName: c.fullName,
+    title: c.title,
+    email: c.email,
+    organization: c.organization
+      ? { name: c.organization.name, city: c.organization.city, country: c.organization.country }
+      : null,
+    contactTypeName: c.organization?.contactType?.name ?? null,
+  });
+}
+
 /** Extract the distinct variable names referenced by a template string. */
 export function extractVariables(template: string): string[] {
   const found = new Set<string>();

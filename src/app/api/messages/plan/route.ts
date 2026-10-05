@@ -3,7 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { resolveContact } from "@/lib/contactResolve";
 import { isEmailSuppressed } from "@/lib/outreach";
-import { scheduleFollowUpEmails, validateFollowUps, type FollowUpInput } from "@/lib/followupPlan";
+import { personalizePlan, scheduleFollowUpEmails, validateFollowUps, type FollowUpInput } from "@/lib/followupPlan";
+import { contactMergeContext } from "@/lib/merge";
 import { resolveSchedule } from "@/lib/schedule";
 import { readMailConfig } from "@/lib/mail/config";
 import { normalizeEmail } from "@/lib/email";
@@ -91,6 +92,25 @@ export async function POST(request: Request) {
 
   const scheduledFor = resolveSchedule(d.firstSchedule.kind, now, d.firstSchedule.todayTime);
 
+  // Fill this lead's fields ({{firstName|there}}, {{orgName}}, snippets) into the
+  // first email and every follow-up. Anything this lead has no value for stays
+  // visible as [field?], and sendMessage won't send it until it's fixed.
+  const [withOrg, snippets] = await Promise.all([
+    prisma.contact.findUnique({
+      where: { id: contact.id },
+      include: {
+        organization: { select: { name: true, city: true, country: true, contactType: { select: { name: true } } } },
+      },
+    }),
+    prisma.snippet.findMany({ select: { label: true, body: true } }),
+  ]);
+  const plan = personalizePlan({
+    first: d.first,
+    followUps,
+    context: contactMergeContext({ ...(withOrg ?? contact), email: to }),
+    snippets,
+  });
+
   // Optionally continue the thread of the last email you sent this contact.
   const lastSent = d.replyToLast
     ? await prisma.emailMessage.findFirst({
@@ -99,7 +119,7 @@ export async function POST(request: Request) {
         select: { id: true, subject: true },
       })
     : null;
-  const firstSubject = lastSent ? replySubject(lastSent.subject) : d.first.subject.trim();
+  const firstSubject = lastSent ? replySubject(lastSent.subject) : plan.first.subject.trim();
 
   // Create the first email in Ready to send (never sent here).
   const first = await prisma.emailMessage.create({
@@ -108,7 +128,7 @@ export async function POST(request: Request) {
       direction: "outbound",
       status: "queued",
       subject: firstSubject,
-      body: d.first.body,
+      body: plan.first.body,
       toAddress: to,
       fromAddress: readMailConfig()?.fromAddress ?? null,
       scheduledFor,
@@ -122,7 +142,7 @@ export async function POST(request: Request) {
     firstSubject,
     contactId: contact.id,
     toAddress: to,
-    followUps,
+    followUps: plan.followUps,
     now,
   });
   if (!fuResult.ok) {
@@ -150,5 +170,7 @@ export async function POST(request: Request) {
     followUpCount: fuResult.createdIds.length,
     createdContact: resolved.createdContact,
     scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
+    // Saved, but these won't send until the missing fields are filled in.
+    needsFixing: plan.unfilled,
   });
 }

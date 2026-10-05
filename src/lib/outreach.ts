@@ -5,7 +5,8 @@
  *   - message exists, is outbound, and has not already been sent/replied/bounced
  *   - contact has an email, is not suppressed (flag or suppression list)
  *   - not a reserved demo domain (.example/.invalid/.test/.localhost)
- *   - no unresolved merge placeholders like [firstName?] or [snippet:X?]
+ *   - no unfilled fields: [firstName?], raw {{orgName}}, {typo}, [School name]
+ *     (see src/lib/placeholders.ts) — an email with a missing field never sends
  *   - the sequence it belongs to has not been stopped (e.g. they replied)
  *   - the daily send limit (Singapore day) is not reached
  *   - a mail account is configured
@@ -262,7 +263,7 @@ export async function sendMessage(db: Db, messageId: string, opts: SendOptions):
   if (!subject) return fail("empty_subject", "Subject is empty.");
   const placeholders = findPlaceholders(subject, message.body);
   if (placeholders.length) {
-    return fail("placeholders", `Fill in the missing merge fields first: ${placeholders.join(", ")}`);
+    return fail("placeholders", `Not sent: fill in the missing fields first (${placeholders.join(", ")}).`);
   }
 
   // The cron only releases messages whose scheduled time has arrived. (A user
@@ -407,6 +408,8 @@ export interface ReleaseResult {
   attempted: number;
   sent: number;
   failed: number;
+  /** Held back because a field is missing (marked failed until you fix it). */
+  blocked: number;
   hitLimit: boolean;
 }
 
@@ -432,7 +435,7 @@ export async function releaseScheduled(
   const timeZone = opts.timeZone ?? APP_TIMEZONE;
   const dailyLimit = opts.dailyLimit ?? DEFAULT_DAILY_SEND_LIMIT;
   const max = opts.max ?? 15;
-  const result: ReleaseResult = { attempted: 0, sent: 0, failed: 0, hitLimit: false };
+  const result: ReleaseResult = { attempted: 0, sent: 0, failed: 0, blocked: 0, hitLimit: false };
   if (!opts.mailer) return result;
 
   const orConditions: Prisma.EmailMessageWhereInput[] = [{ scheduledFor: { lte: now } }];
@@ -473,6 +476,15 @@ export async function releaseScheduled(
     else if (res.code === "daily_limit") {
       result.hitLimit = true;
       break;
+    } else if (res.code === "placeholders") {
+      // A missing field won't fix itself: park it as failed with the reason so
+      // it shows in Ready to send and stops being retried every tick. Editing
+      // and saving it puts it back in the queue.
+      result.blocked += 1;
+      await db.emailMessage.updateMany({
+        where: { id: m.id, status: { in: ["queued", "approved"] } },
+        data: { status: "failed", error: res.reason ?? "Not sent: a field is missing." },
+      });
     } else if (res.code !== "scheduled" && res.code !== "waiting_parent") result.failed += 1;
   }
   return result;

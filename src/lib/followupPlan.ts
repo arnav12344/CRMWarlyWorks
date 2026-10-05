@@ -22,6 +22,8 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { replySubject } from "./mail/compose";
+import { renderEmail, renderString, type MergeContext, type MergeSnippet } from "./merge";
+import { findPlaceholders } from "./placeholders";
 
 type Db = PrismaClient;
 
@@ -84,6 +86,34 @@ export function validateFollowUps(followUps: FollowUpInput[], now: Date = new Da
     }
   }
   return { ok: true };
+}
+
+export interface PersonalizedPlan {
+  first: { subject: string; body: string };
+  followUps: FollowUpInput[];
+  /** Fields still unfilled after rendering; those emails are saved but won't send until fixed. */
+  unfilled: string[];
+}
+
+/**
+ * Fill a lead's merge fields ({{firstName|there}}, {{orgName}}, {{snippet:X}})
+ * into the first email and every follow-up. A field the lead has no value for
+ * becomes a visible [field?] that blocks sending. Pure, so it is unit-tested.
+ */
+export function personalizePlan(input: {
+  first: { subject: string; body: string };
+  followUps: FollowUpInput[];
+  context: MergeContext;
+  snippets: MergeSnippet[];
+}): PersonalizedPlan {
+  const first = renderEmail(input.first, input.context, input.snippets);
+  const followUps = input.followUps.map((f) => ({
+    ...f,
+    subject: f.subject == null ? f.subject : renderString(f.subject, input.context, input.snippets).text,
+    body: renderString(f.body, input.context, input.snippets).text,
+  }));
+  const unfilled = findPlaceholders(first.subject, first.body, ...followUps.flatMap((f) => [f.subject, f.body]));
+  return { first: { subject: first.subject, body: first.body }, followUps, unfilled };
 }
 
 /**
